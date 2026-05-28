@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>YT Pixel Progress Bar — Options</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font: 13px/1.6 system-ui, -apple-system, sans-serif;
+      background: #181818;
+      color: #ccc;
+      padding: 28px 24px 32px;
+      max-width: 400px;
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #eee;
+      letter-spacing: .02em;
+      margin-bottom: 24px;
+    }
+
+    h2 {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: #666;
+      margin: 22px 0 10px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .row label {
+      font-size: 12px;
+      color: #999;
+      flex: 0 0 44px;
+    }
+
+    input[type="color"] {
+      -webkit-appearance: none;
+      width: 36px;
+      height: 22px;
+      border: 1px solid #444;
+      border-radius: 3px;
+      background: none;
+      cursor: pointer;
+      padding: 2px;
+      flex-shrink: 0;
+    }
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
+
+    .alpha-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+
+    input[type="range"] {
+      flex: 1;
+      height: 3px;
+      accent-color: #afafaf;
+      cursor: pointer;
+    }
+
+    .alpha-val {
+      font-size: 11px;
+      color: #555;
+      width: 32px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: "Courier New", monospace;
+    }
+
+    /* ── Preview ── */
+    .preview-wrap {
+      margin-top: 20px;
+    }
+
+    .preview {
+      position: relative;
+      height: 36px;
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .prev-unplayed {
+      position: absolute;
+      left: 0; bottom: 0;
+      width: 100%; height: 1px;
+    }
+    .prev-played {
+      position: absolute;
+      left: 0; bottom: 0;
+      width: 60%; height: 1px;
+    }
+    .prev-time {
+      position: absolute;
+      left: 0; bottom: 3px;
+      font: 10px/10px "Courier New", Courier, monospace;
+      padding: 0 2px;
+      white-space: nowrap;
+      -webkit-font-smoothing: none;
+      font-smooth: never;
+      text-rendering: optimizeSpeed;
+      user-select: none;
+    }
+
+    /* ── Buttons ── */
+    .btns {
+      display: flex;
+      gap: 8px;
+      margin-top: 24px;
+    }
+
+    button {
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid #444;
+      background: #252525;
+      color: #ccc;
+      transition: background .1s;
+    }
+    button:hover { background: #2e2e2e; }
+
+    button.primary {
+      background: #afafaf;
+      color: #111;
+      border-color: transparent;
+      font-weight: 600;
+    }
+    button.primary:hover { background: #c5c5c5; }
+
+    #status {
+      font-size: 11px;
+      color: #afafaf;
+      margin-top: 10px;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>YT Pixel Progress Bar</h1>
+
+  <!-- Played bar -->
+  <h2>Played bar</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="playedColor" value="#afafaf">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="playedAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="playedAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <!-- Unplayed bar -->
+  <h2>Unplayed bar</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="unplayedColor" value="#4b4b4b">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="unplayedAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="unplayedAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <!-- Text -->
+  <h2>Time text</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="textColor" value="#afafaf">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="textAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="textAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <!-- Live preview -->
+  <h2>Preview</h2>
+  <div class="preview-wrap">
+    <div class="preview">
+      <div class="prev-unplayed" id="prevUnplayed"></div>
+      <div class="prev-played"   id="prevPlayed"></div>
+      <div class="prev-time"     id="prevTime">12:34</div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btns">
+    <button class="primary" id="saveBtn">Save</button>
+    <button id="resetBtn">Reset to defaults</button>
+  </div>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

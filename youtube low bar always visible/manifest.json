@@ -1,8 +1,10 @@
 {
   "manifest_version": 3,
   "name": "YT Pixel Progress Bar",
-  "version": "1.0.0",
-  "description": "Adds a permanent 1px progress bar to the bottom of every YouTube video.",
+  "version": "1.1.0",
+  "description": "Adds a permanent 1px progress bar and current playback time to the bottom of every YouTube video.",
+  "permissions": ["storage"],
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
