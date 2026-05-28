@@ -13,7 +13,7 @@
   const BAR_ID   = '__yt_ppb_bar__';
   const TIME_ID  = '__yt_ppb_time__';
   const STYLE_ID = '__yt_ppb_style__';
-  const FONT_PX  = 10;
+  const FONT_PX  = 8;
   const GAP_PX   = 2; // gap between text bottom and bar top
 
   let cfg = { ...DEFAULTS };
