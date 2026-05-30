@@ -30,8 +30,23 @@
   const PREV_SEL = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
   const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
 
-  const inPrev       = el => el.isConnected && !!el.closest(PREV_SEL);
-  const isMusicPrev  = el => !!el.closest('yt-video-attribute-view-model');
+  const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
+
+  // Music detection must happen in the muted setter — the ONLY reliable window.
+  // By the time the play event fires, YouTube has moved the <video> out of the
+  // music card's shadow DOM into the global ytd-video-preview overlay, so
+  // closest() returns null there. We cache the result on the element.
+  // The 500ms guard prevents the second muted call (after the move) from
+  // clearing a tag that was just set.
+  function tagMusicIfNeeded(el) {
+    const inMusicCard = !!el.closest('yt-video-attribute-view-model');
+    if (inMusicCard) {
+      el.__bennMusic  = true;
+      el.__bennMusicT = Date.now();
+    } else if (!el.__bennMusicT || Date.now() - el.__bennMusicT > 500) {
+      el.__bennMusic = false;
+    }
+  }
 
   // ── Settings bridge ───────────────────────────────────────────────────────
   window.addEventListener('message', e => {
@@ -74,6 +89,8 @@
     get() { return origMuted.get.call(this); },
     set(val) {
       if (inPrev(this)) {
+        // Tag while the video may still be inside the music card shadow DOM.
+        tagMusicIfNeeded(this);
         if (val) {
           if (recentClick || userHasMuted) {
             if (recentClick) userHasMuted = true;
@@ -113,10 +130,12 @@
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling backstop: re-enforces unmute; nudges button when it actually flips.
+  // Polling backstop: re-enforces unmute + hard 1× for music previews.
   setInterval(() => {
-    if (userHasMuted) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      // Enforce 1× for music previews (covers loops, seeks, rate resets).
+      if (v.__bennMusic && !v.paused && v.playbackRate !== 1) v.playbackRate = 1;
+      if (userHasMuted) return;
       let flipped = false;
       if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
       if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
@@ -128,7 +147,7 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
-    v.playbackRate = isMusicPrev(v) ? 1 : previewSpeed;
+    v.playbackRate = v.__bennMusic ? 1 : previewSpeed;
   }, true);
 
   // ── Wheel shortcuts ───────────────────────────────────────────────────────
@@ -179,12 +198,13 @@
         v.currentTime + (up ? scrubStep : -scrubStep)));
       flash((up ? '+' : '−') + scrubStep + 's', e.clientX, e.clientY);
     } else {
+      // Music previews are locked at 1× — speed wheel is ignored entirely.
+      if (v.__bennMusic) { v.playbackRate = 1; return; }
       const newRate = Math.max(0.1,
         Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
       v.playbackRate = newRate;
       flash(newRate.toFixed(2) + '×', e.clientX, e.clientY);
-      // Save new default only for regular (non-music) preview videos
-      if (inPrev(v) && !isMusicPrev(v)) {
+      if (inPrev(v)) {
         previewSpeed = newRate;
         window.postMessage({ type: '__benn_yt_save__', previewSpeed: newRate }, '*');
       }
