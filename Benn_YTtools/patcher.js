@@ -1,12 +1,12 @@
 /**
  * Benn YT Tools — patcher.js  (MAIN world)
  *
- * Music detection uses FOUR methods in parallel (true if any fires), because
- * a single assumption about the music element's tag has repeatedly failed:
- *   M1 light-DOM closest        M2 shadow-piercing closest
- *   M3 elementsFromPoint stack  M4 geometric rect overlap
- * A DEBUG line logs which method fired + how many music cards exist in the DOM
- * so the real marker can be confirmed if all four miss.
+ * Music detection (confirmed via console diagnostics):
+ *   The music marker `yt-video-attribute-view-model` lives in the card's
+ *   metadata area (song/artist chip BELOW the thumbnail), not under the
+ *   thumbnail/cursor — so point-based checks never reached it. Correct
+ *   approach: locate the CARD that owns the hovered preview, then search the
+ *   whole card subtree for the music chip wherever it sits.
  *
  * Music previews:  force-unmuted (no mute button → no desync) + locked to 1×.
  * Regular previews: vanilla mute (in-card button stays in sync) + previewSpeed.
@@ -28,8 +28,11 @@
   const origSetAttr = Element.prototype.setAttribute;
 
   const PREV_SEL  = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
-  // Candidate markers identifying a MUSIC card/preview.
-  const MUSIC_SEL = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model,a[href*="music.youtube.com"]';
+  // The card container that owns a preview.
+  const CARD_SEL  = 'yt-lockup-view-model,ytd-rich-item-renderer,ytd-rich-grid-media,' +
+                    'ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
+  // The music chip that appears inside a music card's metadata.
+  const MUSIC_SEL = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model';
 
   const inPrev = el => el && el.isConnected && !!el.closest(PREV_SEL);
 
@@ -49,52 +52,33 @@
   document.addEventListener('mousemove',   onMove, true);
   document.addEventListener('pointermove', onMove, true);
 
-  // Shadow-piercing closest: walk up parentNode AND host boundaries.
-  function deepClosest(el, sel) {
-    let node = el;
-    while (node) {
-      if (node.nodeType === 1 && node.matches) {
-        try { if (node.matches(sel)) return node; } catch (_) {}
+  // Find the card that owns this preview video. The preview overlay may be a
+  // relocated singleton, so try (1) the video's own ancestors, then (2) the
+  // element stack at the video's centre, then (3) the cursor location.
+  function findCard(v) {
+    if (v && v.closest) { const c = v.closest(CARD_SEL); if (c) return c; }
+    const pts = [];
+    if (v && v.getBoundingClientRect) {
+      const r = v.getBoundingClientRect();
+      if (r.width && r.height) pts.push([r.left + r.width / 2, r.top + r.height / 2]);
+    }
+    if (mx >= 0) pts.push([mx, my]);
+    for (const [x, y] of pts) {
+      let stack;
+      try { stack = document.elementsFromPoint(x, y); } catch (_) { stack = []; }
+      for (const el of stack) {
+        const c = el.closest && el.closest(CARD_SEL);
+        if (c) return c;
       }
-      node = node.parentNode || (node.host ? node.host : null)
-           || (node.getRootNode && node.getRootNode() instanceof ShadowRoot
-                ? node.getRootNode().host : null);
     }
     return null;
   }
 
-  function pointerStack() {
-    if (mx < 0) return [];
-    try { return document.elementsFromPoint(mx, my); } catch (_) { return []; }
-  }
-
-  function rectsOverlap(a, b) {
-    return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
-  }
-
-  // Returns { music, why } — `why` records which method(s) fired.
   function detectMusic(v) {
-    const why = [];
-    // M1: light-DOM closest from the video.
-    if (v && v.closest) { try { if (v.closest(MUSIC_SEL)) why.push('M1'); } catch (_) {} }
-    // M2: shadow-piercing closest from the video.
-    if (v && deepClosest(v, MUSIC_SEL)) why.push('M2');
-    // M3: cursor element stack (sees through the hover overlay).
-    if (pointerStack().some(el => { try { return el.closest && el.closest(MUSIC_SEL); } catch (_) { return false; } }))
-      why.push('M3');
-    // M4: geometric overlap of the video's rect with any music-card rect.
-    if (v && v.getBoundingClientRect) {
-      try {
-        const vr = v.getBoundingClientRect();
-        if (vr.width && vr.height) {
-          for (const card of document.querySelectorAll(MUSIC_SEL)) {
-            const cr = card.getBoundingClientRect();
-            if (cr.width && cr.height && rectsOverlap(vr, cr)) { why.push('M4'); break; }
-          }
-        }
-      } catch (_) {}
-    }
-    return { music: why.length > 0, why };
+    const card = findCard(v);
+    let marker = null;
+    if (card) { try { marker = card.querySelector(MUSIC_SEL); } catch (_) {} }
+    return { music: !!marker, card, marker };
   }
 
   const isMusic = v => detectMusic(v).music;
@@ -143,13 +127,11 @@
     const d = detectMusic(v);
     v.playbackRate = d.music ? 1 : previewSpeed;
     if (DEBUG) {
-      const stack = pointerStack()
-        .map(el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : ''))
-        .slice(0, 12).join(' < ');
-      console.log('[BennYT] play — music=' + d.music + ' via=[' + d.why.join(',') + ']' +
+      console.log('[BennYT] play — music=' + d.music +
+                  ' card=' + (d.card ? d.card.tagName.toLowerCase() : 'none') +
+                  ' marker=' + (d.marker ? d.marker.tagName.toLowerCase() : 'none') +
                   ' rate=' + v.playbackRate +
-                  ' musicCardsInDOM=' + document.querySelectorAll(MUSIC_SEL).length +
-                  ' | stack: ' + stack);
+                  ' musicCardsInDOM=' + document.querySelectorAll(MUSIC_SEL).length);
     }
   }, true);
 
