@@ -1,23 +1,17 @@
 /**
  * Benn YT Tools — patcher.js  (MAIN world)
  *
- * Music-vs-regular detection — THE HARD PART:
- *   On hover, YouTube floats a shared preview overlay ON TOP of the card.
- *   The cursor therefore sits over that overlay (identical for music and
- *   regular videos), NOT over the card element underneath. So closest() on
- *   the hovered element / the <video> never finds the music marker.
- *   Fix: document.elementsFromPoint(cursor) sees THROUGH the overlay and
- *   returns the full stack, including the card below — so we can find the
- *   music marker there.
+ * Music detection uses FOUR methods in parallel (true if any fires), because
+ * a single assumption about the music element's tag has repeatedly failed:
+ *   M1 light-DOM closest        M2 shadow-piercing closest
+ *   M3 elementsFromPoint stack  M4 geometric rect overlap
+ * A DEBUG line logs which method fired + how many music cards exist in the DOM
+ * so the real marker can be confirmed if all four miss.
  *
- * Mute:
- *   - Music previews (no mute button) → force-unmuted (block synchronously,
- *     never oscillate).
- *   - Regular previews → vanilla (their in-card mute button stays in sync).
- *
- * Speed:
- *   - Regular previews → previewSpeed; Shift+wheel saves the new rate.
- *   - Music previews → always 1×; Shift+wheel applies temporarily, never saved.
+ * Music previews:  force-unmuted (no mute button → no desync) + locked to 1×.
+ * Regular previews: vanilla mute (in-card button stays in sync) + previewSpeed.
+ * Returning to a regular card: isMusic() flips false instantly, so regular
+ * cards get their own mute/speed naturally (nothing to "revert").
  */
 (function () {
 
@@ -25,7 +19,6 @@
   const DEFAULT_VOLUME = 0.4;
   const POLL_MS        = 120;
 
-  // Defaults overwritten by postMessage on load.
   let scrubStep    = 5;
   let speedStep    = 0.2;
   let previewSpeed = 1.5;
@@ -35,7 +28,7 @@
   const origSetAttr = Element.prototype.setAttribute;
 
   const PREV_SEL  = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
-  // Markers that identify a MUSIC card/preview (checked under the cursor).
+  // Candidate markers identifying a MUSIC card/preview.
   const MUSIC_SEL = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model,a[href*="music.youtube.com"]';
 
   const inPrev = el => el && el.isConnected && !!el.closest(PREV_SEL);
@@ -50,24 +43,61 @@
     if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
   });
 
-  // ── Cursor tracking + music detection (sees through the preview overlay) ──
+  // ── Cursor tracking ───────────────────────────────────────────────────────
   let mx = -1, my = -1;
   const onMove = e => { mx = e.clientX; my = e.clientY; };
   document.addEventListener('mousemove',   onMove, true);
   document.addEventListener('pointermove', onMove, true);
+
+  // Shadow-piercing closest: walk up parentNode AND host boundaries.
+  function deepClosest(el, sel) {
+    let node = el;
+    while (node) {
+      if (node.nodeType === 1 && node.matches) {
+        try { if (node.matches(sel)) return node; } catch (_) {}
+      }
+      node = node.parentNode || (node.host ? node.host : null)
+           || (node.getRootNode && node.getRootNode() instanceof ShadowRoot
+                ? node.getRootNode().host : null);
+    }
+    return null;
+  }
 
   function pointerStack() {
     if (mx < 0) return [];
     try { return document.elementsFromPoint(mx, my); } catch (_) { return []; }
   }
 
-  // A preview is "music" if the music marker is found anywhere in the
-  // cursor's element stack (the card sitting under the overlay), or — as a
-  // cheap fallback — as an ancestor of the <video> itself.
-  function isMusic(v) {
-    if (v && v.closest && v.closest(MUSIC_SEL)) return true;
-    return pointerStack().some(el => el.closest && el.closest(MUSIC_SEL));
+  function rectsOverlap(a, b) {
+    return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
   }
+
+  // Returns { music, why } — `why` records which method(s) fired.
+  function detectMusic(v) {
+    const why = [];
+    // M1: light-DOM closest from the video.
+    if (v && v.closest) { try { if (v.closest(MUSIC_SEL)) why.push('M1'); } catch (_) {} }
+    // M2: shadow-piercing closest from the video.
+    if (v && deepClosest(v, MUSIC_SEL)) why.push('M2');
+    // M3: cursor element stack (sees through the hover overlay).
+    if (pointerStack().some(el => { try { return el.closest && el.closest(MUSIC_SEL); } catch (_) { return false; } }))
+      why.push('M3');
+    // M4: geometric overlap of the video's rect with any music-card rect.
+    if (v && v.getBoundingClientRect) {
+      try {
+        const vr = v.getBoundingClientRect();
+        if (vr.width && vr.height) {
+          for (const card of document.querySelectorAll(MUSIC_SEL)) {
+            const cr = card.getBoundingClientRect();
+            if (cr.width && cr.height && rectsOverlap(vr, cr)) { why.push('M4'); break; }
+          }
+        }
+      } catch (_) {}
+    }
+    return { music: why.length > 0, why };
+  }
+
+  const isMusic = v => detectMusic(v).music;
 
   // ── Music-only mute patch (block synchronously, never oscillate) ──────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
@@ -95,13 +125,14 @@
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling backstop: keep music previews unmuted.
+  // Polling backstop: keep currently-playing music previews unmuted + at 1×.
   setInterval(() => {
-    const stackIsMusic = pointerStack().some(el => el.closest && el.closest(MUSIC_SEL));
-    if (!stackIsMusic) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      if (v.paused || v.ended) return;
+      if (!isMusic(v)) return;
       if (origMuted.get.call(v)) origMuted.set.call(v, false);
       if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
+      if (v.playbackRate !== 1) v.playbackRate = 1;
     });
   }, POLL_MS);
 
@@ -109,13 +140,15 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
-    const music = isMusic(v);
-    v.playbackRate = music ? 1 : previewSpeed;
+    const d = detectMusic(v);
+    v.playbackRate = d.music ? 1 : previewSpeed;
     if (DEBUG) {
       const stack = pointerStack()
         .map(el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : ''))
         .slice(0, 12).join(' < ');
-      console.log('[BennYT] preview play — music=' + music + ' rate=' + v.playbackRate +
+      console.log('[BennYT] play — music=' + d.music + ' via=[' + d.why.join(',') + ']' +
+                  ' rate=' + v.playbackRate +
+                  ' musicCardsInDOM=' + document.querySelectorAll(MUSIC_SEL).length +
                   ' | stack: ' + stack);
     }
   }, true);
@@ -167,17 +200,19 @@
       v.currentTime = Math.max(0, Math.min(v.duration || Infinity,
         v.currentTime + (up ? scrubStep : -scrubStep)));
       flash((up ? '+' : '−') + scrubStep + 's', e.clientX, e.clientY);
-    } else {
-      const newRate = Math.max(0.1,
-        Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
-      v.playbackRate = newRate;
-      flash(newRate.toFixed(2) + '×', e.clientX, e.clientY);
-      // Music previews: apply temporarily, never save.
-      if (inPrev(v) && !isMusic(v)) {
-        previewSpeed = newRate;
-        window.postMessage({ type: '__benn_yt_save__', previewSpeed: newRate }, '*');
-      }
+      return;
     }
+    // Speed branch. Music previews are LOCKED at 1× — ignore entirely.
+    if (isMusic(v)) {
+      if (v.playbackRate !== 1) v.playbackRate = 1;
+      return;
+    }
+    const newRate = Math.max(0.1,
+      Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
+    v.playbackRate = newRate;
+    flash(newRate.toFixed(2) + '×', e.clientX, e.clientY);
+    previewSpeed = newRate;
+    window.postMessage({ type: '__benn_yt_save__', previewSpeed: newRate }, '*');
   }
 
   document.addEventListener('wheel', onWheel, { passive: false, capture: true });
