@@ -11,6 +11,7 @@
     fontSize:      8,
     scrubStep:     5,
     speedStep:     0.2,
+    previewSpeed:  1.5,
   };
 
   function rgba(hex, a) {
@@ -41,6 +42,7 @@
       fontSize:      getActiveSize(),
       scrubStep:     parseInt($('scrubStep').value),
       speedStep:     Math.round(parseFloat($('speedStep').value) * 100) / 100,
+      previewSpeed:  Math.round(parseFloat($('previewSpeed').value) * 100) / 100,
     };
   }
 
@@ -54,6 +56,7 @@
     setActiveSize(cfg.fontSize);
     $('scrubStep').value     = cfg.scrubStep;
     $('speedStep').value     = cfg.speedStep;
+    $('previewSpeed').value  = cfg.previewSpeed;
     updatePreview();
   }
 
@@ -68,15 +71,17 @@
     $('textAlphaVal').textContent      = cfg.textAlpha.toFixed(2);
     $('scrubStepVal').textContent      = cfg.scrubStep + ' s';
     $('speedStepVal').textContent      = cfg.speedStep.toFixed(2) + '×';
+    $('previewSpeedVal').textContent   = cfg.previewSpeed.toFixed(2) + '×';
   }
 
   function saveAndPreview() {
     updatePreview();
-    chrome.storage.sync.set(readForm());
+    // local has no per-minute write quota — safe to write on every input
+    chrome.storage.local.set(readForm());
   }
 
   ['playedColor', 'playedAlpha', 'unplayedColor', 'unplayedAlpha',
-   'textColor', 'textAlpha', 'scrubStep', 'speedStep']
+   'textColor', 'textAlpha', 'scrubStep', 'speedStep', 'previewSpeed']
     .forEach(id => $(id).addEventListener('input', saveAndPreview));
 
   document.querySelectorAll('.size-btn').forEach(btn =>
@@ -86,7 +91,16 @@
     }));
 
   $('resetBtn').addEventListener('click', () =>
-    chrome.storage.sync.set(DEFAULTS, () => applyForm(DEFAULTS)));
+    chrome.storage.local.set(DEFAULTS, () => applyForm(DEFAULTS)));
 
-  chrome.storage.sync.get(DEFAULTS, stored => applyForm({ ...DEFAULTS, ...stored }));
+  // Load from local, with one-time sync → local migration (see content.js).
+  function start() {
+    chrome.storage.local.get(DEFAULTS, stored => applyForm({ ...DEFAULTS, ...stored }));
+  }
+  chrome.storage.local.get('__byt_migrated', res => {
+    if (res.__byt_migrated) { start(); return; }
+    chrome.storage.sync.get(DEFAULTS, syncVals => {
+      chrome.storage.local.set({ ...syncVals, __byt_migrated: true }, start);
+    });
+  });
 })();

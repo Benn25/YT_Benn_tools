@@ -11,6 +11,7 @@
     fontSize:      8,
     scrubStep:     5,
     speedStep:     0.2,
+    previewSpeed:  1.5,
   };
 
   const BAR_ID   = '__byt_bar__';
@@ -128,33 +129,59 @@
   // e.source === window check in patcher prevents any third-party spoofing.
   function postHoverSettings() {
     window.postMessage({
-      type:      '__benn_yt_settings__',
-      scrubStep: cfg.scrubStep,
-      speedStep: cfg.speedStep,
+      type:         '__benn_yt_settings__',
+      scrubStep:    cfg.scrubStep,
+      speedStep:    cfg.speedStep,
+      previewSpeed: cfg.previewSpeed,
     }, '*');
   }
 
-  injectStyle();
+  // Receive save requests from patcher (MAIN world) and persist to local storage.
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    if (!e.data || e.data.type !== '__benn_yt_save__') return;
+    const { previewSpeed: ps } = e.data;
+    if (typeof ps === 'number' && ps >= 0.5 && ps <= 3) {
+      chrome.storage.local.set({ previewSpeed: ps });
+    }
+  });
 
-  chrome.storage.sync.get(DEFAULTS, stored => {
+  function startWithCfg(stored) {
     Object.assign(cfg, stored);
     postHoverSettings();
     tick();
+  }
+
+  // Storage = chrome.storage.local (NO per-minute write quota, unlike sync —
+  // sync's 120 writes/min limit was silently breaking live colour updates
+  // after a few seconds of slider dragging). One-time migration copies any
+  // previously-saved sync values into local so tuned colours carry over.
+  chrome.storage.local.get('__byt_migrated', res => {
+    if (res.__byt_migrated) {
+      chrome.storage.local.get(DEFAULTS, startWithCfg);
+    } else {
+      chrome.storage.sync.get(DEFAULTS, syncVals => {
+        chrome.storage.local.set({ ...syncVals, __byt_migrated: true }, () => {
+          chrome.storage.local.get(DEFAULTS, startWithCfg);
+        });
+      });
+    }
   });
 
-  // Primary path: instant update when popup writes to storage.
+  injectStyle();
+
+  // Primary path: instant update when popup writes to local storage.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync') return;
+    if (area !== 'local') return;
     for (const [k, { newValue }] of Object.entries(changes))
       if (k in DEFAULTS) cfg[k] = newValue;
     postHoverSettings();
   });
 
-  // Backup poll: re-reads storage every 100 ms (≥10 fps) in case onChanged
-  // goes silent after a YouTube SPA navigation. Tick() already applies cfg
-  // every rAF frame, so colours update within one frame of cfg changing.
+  // Backup poll (≥10 fps): re-reads local + re-posts hover settings to the
+  // MAIN-world patcher. Local reads are unlimited, so this can never break.
   setInterval(() => {
-    chrome.storage.sync.get(DEFAULTS, stored => {
+    chrome.storage.local.get(DEFAULTS, stored => {
       Object.assign(cfg, stored);
       postHoverSettings();
     });
