@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Benn YT Tools",
+  "version": "1.0.0",
+  "description": "Persistent progress bar + hover preview unmute + wheel shortcuts for YouTube.",
+  "permissions": ["storage"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Benn YT Tools"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["patcher.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16":  "icon16.png",
+    "48":  "icon48.png",
+    "128": "icon128.png"
+  }
+}

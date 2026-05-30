@@ -1,29 +1,25 @@
 /**
- * YT Hover Sound — patcher.js  v2.5.1
+ * Benn YT Tools — patcher.js
  *
- * Mute state persists across cards: if the user muted, the next card is also
- * muted; if the user unmuted, the next card is also unmuted. Default on page
- * load: unmuted. Music videos (no button) respect the same carried-over state.
+ * Runs in MAIN world (required to patch HTMLMediaElement.prototype).
+ * Cannot access chrome.storage directly; receives scrubStep / speedStep
+ * from content.js via namespaced postMessage.
  *
- * Audio is force-unmuted by BLOCKING YouTube's auto-mute (muted is held at
- * false synchronously). This never flips the property back and forth, so it
- * generates no event storms — stable, low CPU.
+ * Mute logic: block synchronously (never oscillate the property — see skill notes).
+ * Mute state persists across cards: last user choice carries forward.
  *
- * Button sync (best-effort): when the poll actually flips a video from
- * muted→unmuted, we fire a single guarded synthetic `volumechange` so
- * YouTube's mute button re-reads the real state. The re-entry guard makes a
- * feedback loop impossible.
- *
- * Wheel shortcuts (any preview):
- *   Shift + wheel        → playback speed ±0.2
- *   Shift + Alt + wheel  → scrub ±10s
+ * Wheel shortcuts:
+ *   Shift + wheel        → playback speed ± speedStep
+ *   Shift + Alt + wheel  → scrub ± scrubStep seconds
  */
 (function () {
 
-  const DEFAULT_VOLUME = 0.4;
-  const POLL_MS    = 120;
-  const SPEED_STEP = 0.2;
-  const SCRUB_STEP = 10;
+  const DEFAULT_VOLUME  = 0.4;
+  const POLL_MS         = 120;
+
+  // Defaults match DEFAULTS in content.js; overwritten by postMessage on load.
+  let scrubStep = 5;
+  let speedStep = 0.2;
 
   const origMuted   = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
   const origVolume  = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
@@ -34,9 +30,16 @@
 
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
+  // ── Settings bridge ───────────────────────────────────────────────────────
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    if (!e.data || e.data.type !== '__benn_yt_settings__') return;
+    const { scrubStep: s, speedStep: sp } = e.data;
+    if (typeof s  === 'number' && s  >= 1    && s  <= 15)  scrubStep = s;
+    if (typeof sp === 'number' && sp >= 0.05 && sp <= 0.5) speedStep = sp;
+  });
+
   // ── User-click detection ──────────────────────────────────────────────────
-  // recentClick: true for 250 ms after any click inside a card/preview area.
-  // userHasMuted: persists across cards — carries the user's last mute choice.
   let recentClick  = false;
   let userHasMuted = false;
 
@@ -51,10 +54,7 @@
     }
   }, true);
 
-  // ── Button sync ────────────────────────────────────────────────────────────
-  // Fire a single synthetic volumechange so YouTube's UI re-reads muted/volume
-  // and repaints its mute button. Guarded so it can never re-enter itself if
-  // YouTube responds by touching the audio properties again.
+  // ── Button sync (guarded, loop-proof) ────────────────────────────────────
   let syncing = false;
   function syncMuteButton(v) {
     if (syncing) return;
@@ -70,16 +70,14 @@
       if (inPrev(this)) {
         if (val) {
           if (recentClick || userHasMuted) {
-            // User clicked (or already muted this session) → honour the mute
             if (recentClick) userHasMuted = true;
             origMuted.set.call(this, true);
           } else {
-            // YouTube auto-muting → block it, hold unmuted (no oscillation)
+            // YouTube auto-muting → block synchronously (never oscillate)
             origMuted.set.call(this, false);
             if (origVolume.get.call(this) < 0.01) origVolume.set.call(this, DEFAULT_VOLUME);
           }
         } else {
-          // Unmuting → always allow, clear user-muted flag
           userHasMuted = false;
           origMuted.set.call(this, false);
         }
@@ -93,7 +91,7 @@
     get() { return origVolume.get.call(this); },
     set(val) {
       if (val < 0.01 && inPrev(this)) {
-        if (!recentClick && !userHasMuted) return; // block silent trick
+        if (!recentClick && !userHasMuted) return;
       }
       origVolume.set.call(this, val);
     }, configurable: true,
@@ -101,13 +99,12 @@
 
   Element.prototype.setAttribute = function (n, v) {
     if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this)) {
-      if (!recentClick && !userHasMuted) return; // block
+      if (!recentClick && !userHasMuted) return;
     }
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling: keeps force-unmuting unless the user has muted. Only when a video
-  // is actually flipped muted→unmuted do we nudge the button to re-sync.
+  // Polling backstop: re-enforces unmute; nudges button when it actually flips.
   setInterval(() => {
     if (userHasMuted) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
@@ -162,11 +159,13 @@
     e.stopPropagation();
     const up = e.deltaY < 0;
     if (e.altKey) {
-      v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + (up ? SCRUB_STEP : -SCRUB_STEP)));
-      flash((up ? '+' : '−') + SCRUB_STEP + 's', e.clientX, e.clientY);
+      v.currentTime = Math.max(0, Math.min(v.duration || Infinity,
+        v.currentTime + (up ? scrubStep : -scrubStep)));
+      flash((up ? '+' : '−') + scrubStep + 's', e.clientX, e.clientY);
     } else {
-      v.playbackRate = Math.max(0.1, Math.round((v.playbackRate + (up ? SPEED_STEP : -SPEED_STEP)) * 10) / 10);
-      flash(v.playbackRate.toFixed(1) + '×', e.clientX, e.clientY);
+      v.playbackRate = Math.max(0.1,
+        Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
+      flash(v.playbackRate.toFixed(2) + '×', e.clientX, e.clientY);
     }
   }
 

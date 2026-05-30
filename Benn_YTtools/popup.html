@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Benn YT Tools</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font: 12px/1.5 system-ui, -apple-system, sans-serif;
+      background: #181818;
+      color: #ccc;
+      padding: 16px;
+      width: 280px;
+    }
+
+    h1 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #eee;
+      letter-spacing: .02em;
+      margin-bottom: 10px;
+    }
+
+    /* ── Section dividers ── */
+    .section {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: #484848;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 8px;
+    }
+    .section::before,
+    .section::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #242424;
+    }
+
+    /* ── Sub-labels ── */
+    h2 {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: #555;
+      margin: 10px 0 5px;
+    }
+
+    /* ── Color + alpha row ── */
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .row label {
+      font-size: 11px;
+      color: #888;
+      flex: 0 0 38px;
+    }
+
+    input[type="color"] {
+      -webkit-appearance: none;
+      width: 30px;
+      height: 20px;
+      border: 1px solid #3a3a3a;
+      border-radius: 3px;
+      background: none;
+      cursor: pointer;
+      padding: 2px;
+      flex-shrink: 0;
+    }
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
+
+    .alpha-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+
+    /* ── Sliders (shared by alpha-wrap and standalone slider-row) ── */
+    input[type="range"] {
+      flex: 1;
+      height: 3px;
+      accent-color: #afafaf;
+      cursor: pointer;
+    }
+
+    .alpha-val,
+    .slider-val {
+      font-size: 10px;
+      color: #4a4a4a;
+      width: 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: "Courier New", monospace;
+      flex-shrink: 0;
+    }
+
+    /* ── Standalone slider row (no color picker, just slider + value) ── */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Text size toggle ── */
+    .size-group {
+      display: flex;
+      gap: 4px;
+    }
+    .size-btn {
+      flex: 1;
+      padding: 4px 0;
+      border-radius: 3px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid #3a3a3a;
+      background: #1e1e1e;
+      color: #555;
+      transition: background .1s, color .1s, border-color .1s;
+      text-align: center;
+    }
+    .size-btn:hover { color: #999; }
+    .size-btn.active {
+      background: #2e2e2e;
+      color: #ccc;
+      border-color: #555;
+    }
+
+    /* ── Progress bar preview ── */
+    .preview {
+      position: relative;
+      height: 28px;
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .prev-unplayed {
+      position: absolute;
+      left: 0; bottom: 0;
+      width: 100%; height: 1px;
+    }
+    .prev-played {
+      position: absolute;
+      left: 0; bottom: 0;
+      width: 60%; height: 1px;
+    }
+    .prev-time {
+      position: absolute;
+      left: 0; bottom: 3px;
+      font-family: "Courier New", Courier, monospace;
+      line-height: 1;
+      padding: 0 2px;
+      white-space: nowrap;
+      -webkit-font-smoothing: none;
+      font-smooth: never;
+      text-rendering: optimizeSpeed;
+      user-select: none;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 14px;
+    }
+    .autosave {
+      font-size: 10px;
+      color: #3a3a3a;
+    }
+    button.reset-btn {
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid #3a3a3a;
+      background: #222;
+      color: #888;
+      transition: background .1s, color .1s;
+    }
+    button.reset-btn:hover { background: #2a2a2a; color: #bbb; }
+  </style>
+</head>
+<body>
+
+  <h1>Benn YT Tools</h1>
+
+  <div class="section">Progress Bar</div>
+
+  <h2>Played bar</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="playedColor" value="#afafaf">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="playedAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="playedAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <h2>Unplayed bar</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="unplayedColor" value="#4b4b4b">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="unplayedAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="unplayedAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <h2>Time text</h2>
+  <div class="row">
+    <label>Color</label>
+    <input type="color" id="textColor" value="#afafaf">
+    <div class="alpha-wrap">
+      <label>Alpha</label>
+      <input type="range" id="textAlpha" min="0" max="1" step="0.01" value="1">
+      <span class="alpha-val" id="textAlphaVal">1.00</span>
+    </div>
+  </div>
+
+  <h2>Text size</h2>
+  <div class="size-group">
+    <button class="size-btn active" data-size="8">S</button>
+    <button class="size-btn"        data-size="10">M</button>
+    <button class="size-btn"        data-size="12">L</button>
+  </div>
+
+  <div class="preview">
+    <div class="prev-unplayed" id="prevUnplayed"></div>
+    <div class="prev-played"   id="prevPlayed"></div>
+    <div class="prev-time"     id="prevTime">12:34</div>
+  </div>
+
+  <div class="section">Hover Preview</div>
+
+  <h2>Scrub step &nbsp;<span style="font-weight:400;letter-spacing:0;text-transform:none;font-size:9px;color:#3a3a3a">(Shift+Alt+wheel)</span></h2>
+  <div class="slider-row">
+    <input type="range" id="scrubStep" min="1" max="15" step="1" value="5">
+    <span class="slider-val" id="scrubStepVal">5 s</span>
+  </div>
+
+  <h2>Speed step &nbsp;<span style="font-weight:400;letter-spacing:0;text-transform:none;font-size:9px;color:#3a3a3a">(Shift+wheel)</span></h2>
+  <div class="slider-row">
+    <input type="range" id="speedStep" min="0.05" max="0.5" step="0.05" value="0.2">
+    <span class="slider-val" id="speedStepVal">0.20×</span>
+  </div>
+
+  <div class="footer">
+    <span class="autosave">Changes applied instantly</span>
+    <button class="reset-btn" id="resetBtn">Reset</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
