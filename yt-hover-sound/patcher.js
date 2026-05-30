@@ -1,13 +1,18 @@
 /**
- * YT Hover Sound — patcher.js  v2.5.0
+ * YT Hover Sound — patcher.js  v2.5.1
  *
- * Mute state persists across cards: if user muted, next card is also muted;
- * if user unmuted, next card is also unmuted. Default on page load: unmuted.
- * Music videos (no button) respect the same carried-over mute state.
+ * Mute state persists across cards: if the user muted, the next card is also
+ * muted; if the user unmuted, the next card is also unmuted. Default on page
+ * load: unmuted. Music videos (no button) respect the same carried-over state.
  *
- * Button sync fix: instead of blocking YouTube's auto-mute outright, we
- * allow it briefly so YouTube can finish updating its button UI, then unmute
- * on the next tick. The gap is ~0 ms and inaudible.
+ * Audio is force-unmuted by BLOCKING YouTube's auto-mute (muted is held at
+ * false synchronously). This never flips the property back and forth, so it
+ * generates no event storms — stable, low CPU.
+ *
+ * Button sync (best-effort): when the poll actually flips a video from
+ * muted→unmuted, we fire a single guarded synthetic `volumechange` so
+ * YouTube's mute button re-reads the real state. The re-entry guard makes a
+ * feedback loop impossible.
  *
  * Wheel shortcuts (any preview):
  *   Shift + wheel        → playback speed ±0.2
@@ -46,30 +51,32 @@
     }
   }, true);
 
+  // ── Button sync ────────────────────────────────────────────────────────────
+  // Fire a single synthetic volumechange so YouTube's UI re-reads muted/volume
+  // and repaints its mute button. Guarded so it can never re-enter itself if
+  // YouTube responds by touching the audio properties again.
+  let syncing = false;
+  function syncMuteButton(v) {
+    if (syncing) return;
+    syncing = true;
+    try { v.dispatchEvent(new Event('volumechange')); } catch (_) {}
+    syncing = false;
+  }
+
   // ── Audio patches ─────────────────────────────────────────────────────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
     get() { return origMuted.get.call(this); },
     set(val) {
       if (inPrev(this)) {
         if (val) {
-          if (recentClick) {
-            // User clicked → honour the mute
-            userHasMuted = true;
-            origMuted.set.call(this, true);
-          } else if (userHasMuted) {
-            // YouTube re-muting a video the user already muted → honour
+          if (recentClick || userHasMuted) {
+            // User clicked (or already muted this session) → honour the mute
+            if (recentClick) userHasMuted = true;
             origMuted.set.call(this, true);
           } else {
-            // YouTube auto-muting: allow briefly so its button UI can sync to
-            // "muted", then unmute on the next tick so it re-syncs to "unmuted".
-            origMuted.set.call(this, true);
-            const vid = this;
-            setTimeout(() => {
-              if (!userHasMuted) {
-                origMuted.set.call(vid, false);
-                if (origVolume.get.call(vid) < 0.01) origVolume.set.call(vid, DEFAULT_VOLUME);
-              }
-            }, 0);
+            // YouTube auto-muting → block it, hold unmuted (no oscillation)
+            origMuted.set.call(this, false);
+            if (origVolume.get.call(this) < 0.01) origVolume.set.call(this, DEFAULT_VOLUME);
           }
         } else {
           // Unmuting → always allow, clear user-muted flag
@@ -94,26 +101,20 @@
 
   Element.prototype.setAttribute = function (n, v) {
     if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this)) {
-      if (!recentClick && !userHasMuted) {
-        // Same allow-briefly pattern: let YouTube set the attribute (and sync
-        // its button), then remove it on the next tick.
-        origSetAttr.call(this, n, v);
-        const el = this;
-        setTimeout(() => {
-          if (!userHasMuted) el.removeAttribute('muted');
-        }, 0);
-        return;
-      }
+      if (!recentClick && !userHasMuted) return; // block
     }
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling: backstop to keep videos unmuted when user hasn't chosen to mute
+  // Polling: keeps force-unmuting unless the user has muted. Only when a video
+  // is actually flipped muted→unmuted do we nudge the button to re-sync.
   setInterval(() => {
     if (userHasMuted) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
-      if (origMuted.get.call(v))         origMuted.set.call(v, false);
+      let flipped = false;
+      if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
       if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
+      if (flipped) syncMuteButton(v);
     });
   }, POLL_MS);
 

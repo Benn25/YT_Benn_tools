@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT Hover Sound",
-  "version": "2.4.0",
+  "version": "2.5.1",
   "description": "Force-unmutes all hover previews; user click still toggles mute. Shift+wheel=speed, Shift+Alt+wheel=scrub.",
   "content_scripts": [
     {
