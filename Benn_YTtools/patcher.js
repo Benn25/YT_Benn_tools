@@ -1,21 +1,21 @@
 /**
  * Benn YT Tools — patcher.js
  *
- * Runs in MAIN world. Receives settings from content.js via namespaced
- * postMessage (__benn_yt_settings__); sends save requests via __benn_yt_save__.
+ * Runs in MAIN world. Receives settings from content.js via
+ * __benn_yt_settings__; sends save requests via __benn_yt_save__.
  *
- * Mute behaviour: fully vanilla. We do NOT override the muted/volume
- * properties anymore — that was the cause of the audio/button desync (and an
- * earlier feedback-loop CPU meltdown). Previews start muted like vanilla
- * YouTube; the user clicks unmute, and YouTube keeps audio + button in sync
- * and remembers the choice across previews natively.
+ * Mute behaviour:
+ *   - Regular card previews: fully vanilla (user clicks the in-card
+ *     mute button; button + audio always agree; no property override).
+ *   - Music card previews (yt-video-attribute-view-model): force-unmuted.
+ *     These cards have NO visible mute button, so there is nothing to
+ *     desync. Audio is blocked synchronously; never oscillate.
  *
  * Preview playback speed:
- *   - Regular video previews start at `previewSpeed` (configurable default).
- *   - MUSIC previews are completely excluded: they always start at 1×.
- *   - Shift+wheel adjusts speed live. On regular previews the new rate is
- *     saved as the default; on music previews it's applied temporarily and
- *     never saved.
+ *   - Regular previews start at `previewSpeed`; Shift+wheel saves the
+ *     new rate.
+ *   - Music previews are fully excluded: always 1×; Shift+wheel applies
+ *     temporarily but is never saved.
  *
  * Wheel shortcuts:
  *   Shift + wheel        → playback speed ± speedStep
@@ -23,10 +23,17 @@
  */
 (function () {
 
-  // Defaults match DEFAULTS in content.js; overwritten by postMessage on load.
+  const DEFAULT_VOLUME = 0.4;
+  const POLL_MS        = 120;
+
+  // Defaults overwritten by postMessage on load.
   let scrubStep    = 5;
   let speedStep    = 0.2;
   let previewSpeed = 1.5;
+
+  const origMuted   = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
+  const origVolume  = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
+  const origSetAttr = Element.prototype.setAttribute;
 
   const PREV_SEL  = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
   const CARD_SEL  = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
@@ -37,37 +44,78 @@
   // ── Settings bridge ───────────────────────────────────────────────────────
   window.addEventListener('message', e => {
     if (e.source !== window) return;
-    if (!e.data) return;
-    if (e.data.type === '__benn_yt_settings__') {
-      const { scrubStep: s, speedStep: sp, previewSpeed: ps } = e.data;
-      if (typeof s  === 'number' && s  >= 1    && s  <= 15)  scrubStep    = s;
-      if (typeof sp === 'number' && sp >= 0.05 && sp <= 0.5) speedStep    = sp;
-      if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
-    }
+    if (!e.data || e.data.type !== '__benn_yt_settings__') return;
+    const { scrubStep: s, speedStep: sp, previewSpeed: ps } = e.data;
+    if (typeof s  === 'number' && s  >= 1    && s  <= 15)  scrubStep    = s;
+    if (typeof sp === 'number' && sp >= 0.05 && sp <= 0.5) speedStep    = sp;
+    if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
   });
 
   // ── Music-card hover tracking ─────────────────────────────────────────────
-  // Preview <video> elements live in a shared overlay, not inside the card, so
-  // video.closest(MUSIC_SEL) is unreliable. Instead we track whether the mouse
-  // is currently over a music card vs a regular card. The flag stays put when
-  // the cursor is over neutral page chrome, so it reflects the card that owns
-  // whatever preview is currently playing.
+  // Preview <video> elements live in a shared overlay, so
+  // video.closest(MUSIC_SEL) is always null. Instead, track whether the
+  // mouse just entered a music card vs a regular card.
+  //
+  // mouseenter + matches (exact element, not ancestors) is used so that
+  // hovering over children inside a music card does NOT reset the flag to
+  // false. The flag only changes when the mouse crosses a card boundary.
   let hoverIsMusic = false;
-  document.addEventListener('mouseover', e => {
+  document.addEventListener('mouseenter', e => {
     const t = e.target;
-    if (!t || !t.closest) return;
-    if (t.closest(MUSIC_SEL))      hoverIsMusic = true;
-    else if (t.closest(CARD_SEL))  hoverIsMusic = false;
+    if (!t || !t.matches) return;
+    try {
+      if      (t.matches(MUSIC_SEL)) hoverIsMusic = true;
+      else if (t.matches(CARD_SEL))  hoverIsMusic = false;
+    } catch (_) {}
   }, true);
 
-  // True if the given preview video belongs to a music card.
+  // True when the video (or current hover context) is a music preview.
   const isMusic = v => (v && v.closest && !!v.closest(MUSIC_SEL)) || hoverIsMusic;
+
+  // ── Music-only mute patch ────────────────────────────────────────────────
+  // Only music previews are force-unmuted (no button → no desync possible).
+  // Regular previews pass through to YouTube vanilla — the in-card mute
+  // button stays in sync naturally.
+  // IMPORTANT: block synchronously, never oscillate (see SKILL pitfall note).
+  Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
+    get() { return origMuted.get.call(this); },
+    set(val) {
+      if (val && inPrev(this) && isMusic(this)) {
+        origMuted.set.call(this, false);
+        if (origVolume.get.call(this) < 0.01) origVolume.set.call(this, DEFAULT_VOLUME);
+        return;
+      }
+      origMuted.set.call(this, val);
+    }, configurable: true,
+  });
+
+  Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
+    get() { return origVolume.get.call(this); },
+    set(val) {
+      if (val < 0.01 && inPrev(this) && isMusic(this)) return;
+      origVolume.set.call(this, val);
+    }, configurable: true,
+  });
+
+  Element.prototype.setAttribute = function (n, v) {
+    if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this) && isMusic(this)) return;
+    return origSetAttr.call(this, n, v);
+  };
+
+  // Polling backstop for music previews: catches any mute that slipped
+  // through before hoverIsMusic was set.
+  setInterval(() => {
+    if (!hoverIsMusic) return;
+    document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      if (origMuted.get.call(v)) origMuted.set.call(v, false);
+      if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
+    });
+  }, POLL_MS);
 
   // ── Default preview playback speed ────────────────────────────────────────
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
-    // Music previews are excluded from the speed-up system: always 1×.
     v.playbackRate = isMusic(v) ? 1 : previewSpeed;
   }, true);
 
@@ -123,8 +171,7 @@
         Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
       v.playbackRate = newRate;
       flash(newRate.toFixed(2) + '×', e.clientX, e.clientY);
-      // Save new default only for regular previews. Music previews are
-      // excluded: the change applies temporarily but is never memorised.
+      // Music previews: apply temporarily, never save.
       if (inPrev(v) && !isMusic(v)) {
         previewSpeed = newRate;
         window.postMessage({ type: '__benn_yt_save__', previewSpeed: newRate }, '*');
