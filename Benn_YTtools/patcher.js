@@ -1,28 +1,27 @@
 /**
- * Benn YT Tools — patcher.js
+ * Benn YT Tools — patcher.js  (MAIN world)
  *
- * Runs in MAIN world. Receives settings from content.js via
- * __benn_yt_settings__; sends save requests via __benn_yt_save__.
+ * Music-vs-regular detection — THE HARD PART:
+ *   On hover, YouTube floats a shared preview overlay ON TOP of the card.
+ *   The cursor therefore sits over that overlay (identical for music and
+ *   regular videos), NOT over the card element underneath. So closest() on
+ *   the hovered element / the <video> never finds the music marker.
+ *   Fix: document.elementsFromPoint(cursor) sees THROUGH the overlay and
+ *   returns the full stack, including the card below — so we can find the
+ *   music marker there.
  *
- * Mute behaviour:
- *   - Regular card previews: fully vanilla (user clicks the in-card
- *     mute button; button + audio always agree; no property override).
- *   - Music card previews (yt-video-attribute-view-model): force-unmuted.
- *     These cards have NO visible mute button, so there is nothing to
- *     desync. Audio is blocked synchronously; never oscillate.
+ * Mute:
+ *   - Music previews (no mute button) → force-unmuted (block synchronously,
+ *     never oscillate).
+ *   - Regular previews → vanilla (their in-card mute button stays in sync).
  *
- * Preview playback speed:
- *   - Regular previews start at `previewSpeed`; Shift+wheel saves the
- *     new rate.
- *   - Music previews are fully excluded: always 1×; Shift+wheel applies
- *     temporarily but is never saved.
- *
- * Wheel shortcuts:
- *   Shift + wheel        → playback speed ± speedStep
- *   Shift + Alt + wheel  → scrub ± scrubStep seconds
+ * Speed:
+ *   - Regular previews → previewSpeed; Shift+wheel saves the new rate.
+ *   - Music previews → always 1×; Shift+wheel applies temporarily, never saved.
  */
 (function () {
 
+  const DEBUG          = true;   // logs one line per preview start; set false to silence
   const DEFAULT_VOLUME = 0.4;
   const POLL_MS        = 120;
 
@@ -36,8 +35,8 @@
   const origSetAttr = Element.prototype.setAttribute;
 
   const PREV_SEL  = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
-  const CARD_SEL  = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
-  const MUSIC_SEL = 'yt-video-attribute-view-model';
+  // Markers that identify a MUSIC card/preview (checked under the cursor).
+  const MUSIC_SEL = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model,a[href*="music.youtube.com"]';
 
   const inPrev = el => el && el.isConnected && !!el.closest(PREV_SEL);
 
@@ -51,32 +50,26 @@
     if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
   });
 
-  // ── Music-card hover tracking ─────────────────────────────────────────────
-  // Preview <video> elements live in a shared overlay, so
-  // video.closest(MUSIC_SEL) is always null. Instead, track whether the
-  // mouse just entered a music card vs a regular card.
-  //
-  // mouseenter + matches (exact element, not ancestors) is used so that
-  // hovering over children inside a music card does NOT reset the flag to
-  // false. The flag only changes when the mouse crosses a card boundary.
-  let hoverIsMusic = false;
-  document.addEventListener('mouseenter', e => {
-    const t = e.target;
-    if (!t || !t.matches) return;
-    try {
-      if      (t.matches(MUSIC_SEL)) hoverIsMusic = true;
-      else if (t.matches(CARD_SEL))  hoverIsMusic = false;
-    } catch (_) {}
-  }, true);
+  // ── Cursor tracking + music detection (sees through the preview overlay) ──
+  let mx = -1, my = -1;
+  const onMove = e => { mx = e.clientX; my = e.clientY; };
+  document.addEventListener('mousemove',   onMove, true);
+  document.addEventListener('pointermove', onMove, true);
 
-  // True when the video (or current hover context) is a music preview.
-  const isMusic = v => (v && v.closest && !!v.closest(MUSIC_SEL)) || hoverIsMusic;
+  function pointerStack() {
+    if (mx < 0) return [];
+    try { return document.elementsFromPoint(mx, my); } catch (_) { return []; }
+  }
 
-  // ── Music-only mute patch ────────────────────────────────────────────────
-  // Only music previews are force-unmuted (no button → no desync possible).
-  // Regular previews pass through to YouTube vanilla — the in-card mute
-  // button stays in sync naturally.
-  // IMPORTANT: block synchronously, never oscillate (see SKILL pitfall note).
+  // A preview is "music" if the music marker is found anywhere in the
+  // cursor's element stack (the card sitting under the overlay), or — as a
+  // cheap fallback — as an ancestor of the <video> itself.
+  function isMusic(v) {
+    if (v && v.closest && v.closest(MUSIC_SEL)) return true;
+    return pointerStack().some(el => el.closest && el.closest(MUSIC_SEL));
+  }
+
+  // ── Music-only mute patch (block synchronously, never oscillate) ──────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
     get() { return origMuted.get.call(this); },
     set(val) {
@@ -102,10 +95,10 @@
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling backstop for music previews: catches any mute that slipped
-  // through before hoverIsMusic was set.
+  // Polling backstop: keep music previews unmuted.
   setInterval(() => {
-    if (!hoverIsMusic) return;
+    const stackIsMusic = pointerStack().some(el => el.closest && el.closest(MUSIC_SEL));
+    if (!stackIsMusic) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
       if (origMuted.get.call(v)) origMuted.set.call(v, false);
       if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
@@ -116,7 +109,15 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
-    v.playbackRate = isMusic(v) ? 1 : previewSpeed;
+    const music = isMusic(v);
+    v.playbackRate = music ? 1 : previewSpeed;
+    if (DEBUG) {
+      const stack = pointerStack()
+        .map(el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : ''))
+        .slice(0, 12).join(' < ');
+      console.log('[BennYT] preview play — music=' + music + ' rate=' + v.playbackRate +
+                  ' | stack: ' + stack);
+    }
   }, true);
 
   // ── Wheel shortcuts ───────────────────────────────────────────────────────
