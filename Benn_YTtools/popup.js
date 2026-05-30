@@ -11,6 +11,7 @@
     fontSize:      8,
     scrubStep:     5,
     speedStep:     0.2,
+    previewSpeed:  1.5,
   };
 
   function rgba(hex, a) {
@@ -41,6 +42,7 @@
       fontSize:      getActiveSize(),
       scrubStep:     parseInt($('scrubStep').value),
       speedStep:     Math.round(parseFloat($('speedStep').value) * 100) / 100,
+      previewSpeed:  Math.round(parseFloat($('previewSpeed').value) * 100) / 100,
     };
   }
 
@@ -54,6 +56,7 @@
     setActiveSize(cfg.fontSize);
     $('scrubStep').value     = cfg.scrubStep;
     $('speedStep').value     = cfg.speedStep;
+    $('previewSpeed').value  = cfg.previewSpeed;
     updatePreview();
   }
 
@@ -68,6 +71,7 @@
     $('textAlphaVal').textContent      = cfg.textAlpha.toFixed(2);
     $('scrubStepVal').textContent      = cfg.scrubStep + ' s';
     $('speedStepVal').textContent      = cfg.speedStep.toFixed(2) + '×';
+    $('previewSpeedVal').textContent   = cfg.previewSpeed.toFixed(2) + '×';
   }
 
   function saveAndPreview() {
@@ -77,7 +81,7 @@
   }
 
   ['playedColor', 'playedAlpha', 'unplayedColor', 'unplayedAlpha',
-   'textColor', 'textAlpha', 'scrubStep', 'speedStep']
+   'textColor', 'textAlpha', 'scrubStep', 'speedStep', 'previewSpeed']
     .forEach(id => $(id).addEventListener('input', saveAndPreview));
 
   document.querySelectorAll('.size-btn').forEach(btn =>

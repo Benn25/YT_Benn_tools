@@ -11,6 +11,7 @@
     fontSize:      8,
     scrubStep:     5,
     speedStep:     0.2,
+    previewSpeed:  1.5,
   };
 
   const BAR_ID   = '__byt_bar__';
@@ -128,11 +129,22 @@
   // e.source === window check in patcher prevents any third-party spoofing.
   function postHoverSettings() {
     window.postMessage({
-      type:      '__benn_yt_settings__',
-      scrubStep: cfg.scrubStep,
-      speedStep: cfg.speedStep,
+      type:         '__benn_yt_settings__',
+      scrubStep:    cfg.scrubStep,
+      speedStep:    cfg.speedStep,
+      previewSpeed: cfg.previewSpeed,
     }, '*');
   }
+
+  // Receive save requests from patcher (MAIN world) and persist to local storage.
+  window.addEventListener('message', e => {
+    if (e.source !== window) return;
+    if (!e.data || e.data.type !== '__benn_yt_save__') return;
+    const { previewSpeed: ps } = e.data;
+    if (typeof ps === 'number' && ps >= 0.5 && ps <= 3) {
+      chrome.storage.local.set({ previewSpeed: ps });
+    }
+  });
 
   function startWithCfg(stored) {
     Object.assign(cfg, stored);
