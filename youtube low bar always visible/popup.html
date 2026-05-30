@@ -80,6 +80,31 @@
       font-family: "Courier New", monospace;
     }
 
+    /* Size selector */
+    .size-group {
+      display: flex;
+      gap: 4px;
+    }
+
+    .size-btn {
+      flex: 1;
+      padding: 4px 0;
+      border-radius: 3px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid #3a3a3a;
+      background: #1e1e1e;
+      color: #555;
+      transition: background .1s, color .1s, border-color .1s;
+      text-align: center;
+    }
+    .size-btn:hover { color: #999; }
+    .size-btn.active {
+      background: #2e2e2e;
+      color: #ccc;
+      border-color: #555;
+    }
+
     /* Preview */
     .preview {
       position: relative;
@@ -104,7 +129,8 @@
     .prev-time {
       position: absolute;
       left: 0; bottom: 3px;
-      font: 8px/8px "Courier New", Courier, monospace;
+      font-family: "Courier New", Courier, monospace;
+      line-height: 1;
       padding: 0 2px;
       white-space: nowrap;
       -webkit-font-smoothing: none;
@@ -126,7 +152,7 @@
       color: #444;
     }
 
-    button {
+    button.reset-btn {
       padding: 4px 10px;
       border-radius: 3px;
       font-size: 11px;
@@ -136,7 +162,7 @@
       color: #888;
       transition: background .1s, color .1s;
     }
-    button:hover { background: #2a2a2a; color: #bbb; }
+    button.reset-btn:hover { background: #2a2a2a; color: #bbb; }
   </style>
 </head>
 <body>
@@ -179,6 +205,14 @@
     </div>
   </div>
 
+  <!-- Font size -->
+  <h2>Text size</h2>
+  <div class="size-group">
+    <button class="size-btn active" data-size="8">S</button>
+    <button class="size-btn"        data-size="10">M</button>
+    <button class="size-btn"        data-size="12">L</button>
+  </div>
+
   <!-- Live preview -->
   <div class="preview">
     <div class="prev-unplayed" id="prevUnplayed"></div>
@@ -187,8 +221,8 @@
   </div>
 
   <div class="footer">
-    <span class="autosave" id="autosaveLabel">Changes applied instantly</span>
-    <button id="resetBtn">Reset</button>
+    <span class="autosave">Changes applied instantly</span>
+    <button class="reset-btn" id="resetBtn">Reset</button>
   </div>
 
   <script src="popup.js"></script>

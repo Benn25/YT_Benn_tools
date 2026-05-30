@@ -107,13 +107,39 @@
     .prev-time {
       position: absolute;
       left: 0; bottom: 3px;
-      font: 10px/10px "Courier New", Courier, monospace;
+      font-family: "Courier New", Courier, monospace;
+      line-height: 1;
       padding: 0 2px;
       white-space: nowrap;
       -webkit-font-smoothing: none;
       font-smooth: never;
       text-rendering: optimizeSpeed;
       user-select: none;
+    }
+
+    /* ── Size selector ── */
+    .size-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .size-btn {
+      flex: 1;
+      padding: 5px 0;
+      border-radius: 3px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid #444;
+      background: #1e1e1e;
+      color: #555;
+      transition: background .1s, color .1s, border-color .1s;
+      text-align: center;
+    }
+    .size-btn:hover { color: #999; }
+    .size-btn.active {
+      background: #2e2e2e;
+      color: #ccc;
+      border-color: #666;
     }
 
     /* ── Buttons ── */
@@ -189,6 +215,14 @@
       <input type="range" id="textAlpha" min="0" max="1" step="0.01" value="1">
       <span class="alpha-val" id="textAlphaVal">1.00</span>
     </div>
+  </div>
+
+  <!-- Font size -->
+  <h2>Text size</h2>
+  <div class="size-group">
+    <button class="size-btn active" data-size="8">S — 8px</button>
+    <button class="size-btn"        data-size="10">M — 10px</button>
+    <button class="size-btn"        data-size="12">L — 12px</button>
   </div>
 
   <!-- Live preview -->
