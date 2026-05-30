@@ -32,20 +32,32 @@
 
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
-  // Music detection must happen in the muted setter — the ONLY reliable window.
-  // By the time the play event fires, YouTube has moved the <video> out of the
-  // music card's shadow DOM into the global ytd-video-preview overlay, so
-  // closest() returns null there. We cache the result on the element.
-  // The 500ms guard prevents the second muted call (after the move) from
-  // clearing a tag that was just set.
-  function tagMusicIfNeeded(el) {
-    const inMusicCard = !!el.closest('yt-video-attribute-view-model');
-    if (inMusicCard) {
-      el.__bennMusic  = true;
-      el.__bennMusicT = Date.now();
-    } else if (!el.__bennMusicT || Date.now() - el.__bennMusicT > 500) {
-      el.__bennMusic = false;
+  // ── Music detection (geometric) ───────────────────────────────────────────
+  // The preview <video> is a SHARED overlay, never a DOM child of the music
+  // card, so closest()/querySelector from the video never find the music chip.
+  // But the overlay is positioned over the hovered card's thumbnail. So: find
+  // each music card (via its yt-video-attribute-view-model chip → owning card)
+  // and test whether the playing preview's centre falls inside that card's
+  // rectangle. The chip itself sits in the metadata area (below the thumbnail),
+  // which is why earlier chip-overlap checks failed — we must use the CARD rect.
+  const MUSIC_CHIP = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model';
+
+  function isMusicVideo(v) {
+    if (!v || !v.getBoundingClientRect) return false;
+    const vr = v.getBoundingClientRect();
+    if (!vr.width || !vr.height) return false;
+    const cx = vr.left + vr.width / 2;
+    const cy = vr.top + vr.height / 2;
+    for (const chip of document.querySelectorAll(MUSIC_CHIP)) {
+      const card = chip.closest(CARD_SEL) || chip.parentElement;
+      if (!card) continue;
+      const cr = card.getBoundingClientRect();
+      if (cr.width && cr.height &&
+          cx >= cr.left && cx <= cr.right && cy >= cr.top && cy <= cr.bottom) {
+        return true;
+      }
     }
+    return false;
   }
 
   // ── Settings bridge ───────────────────────────────────────────────────────
@@ -89,8 +101,6 @@
     get() { return origMuted.get.call(this); },
     set(val) {
       if (inPrev(this)) {
-        // Tag while the video may still be inside the music card shadow DOM.
-        tagMusicIfNeeded(this);
         if (val) {
           if (recentClick || userHasMuted) {
             if (recentClick) userHasMuted = true;
@@ -133,8 +143,12 @@
   // Polling backstop: re-enforces unmute + hard 1× for music previews.
   setInterval(() => {
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
-      // Enforce 1× for music previews (covers loops, seeks, rate resets).
-      if (v.__bennMusic && !v.paused && v.playbackRate !== 1) v.playbackRate = 1;
+      // Re-evaluate music status each cycle (self-corrects if play fired
+      // before the overlay was laid out) and lock music previews to 1×.
+      if (!v.paused && !v.ended) {
+        v.__bennMusic = isMusicVideo(v);
+        if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
+      }
       if (userHasMuted) return;
       let flipped = false;
       if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
@@ -147,6 +161,7 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
+    v.__bennMusic = isMusicVideo(v);
     v.playbackRate = v.__bennMusic ? 1 : previewSpeed;
   }, true);
 
@@ -199,7 +214,7 @@
       flash((up ? '+' : '−') + scrubStep + 's', e.clientX, e.clientY);
     } else {
       // Music previews are locked at 1× — speed wheel is ignored entirely.
-      if (v.__bennMusic) { v.playbackRate = 1; return; }
+      if (isMusicVideo(v)) { v.playbackRate = 1; return; }
       const newRate = Math.max(0.1,
         Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
       v.playbackRate = newRate;
