@@ -1,13 +1,13 @@
 /**
- * YT Hover Sound — patcher.js  v2.4.0
+ * YT Hover Sound — patcher.js  v2.5.0
  *
- * All previews are force-unmuted (fixes music videos with no button).
- * User can still click YouTube's native mute button on regular videos.
- * Music videos are always unmuted (no button exists, user accepted this).
+ * Mute state persists across cards: if user muted, next card is also muted;
+ * if user unmuted, next card is also unmuted. Default on page load: unmuted.
+ * Music videos (no button) respect the same carried-over mute state.
  *
- * Detection strategy: behavioral, not structural.
- * - YouTube auto-muting → blocked (force unmuted)
- * - User clicking a button in the card/preview area → allowed
+ * Button sync fix: instead of blocking YouTube's auto-mute outright, we
+ * allow it briefly so YouTube can finish updating its button UI, then unmute
+ * on the next tick. The gap is ~0 ms and inaudible.
  *
  * Wheel shortcuts (any preview):
  *   Shift + wheel        → playback speed ±0.2
@@ -30,11 +30,10 @@
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
   // ── User-click detection ──────────────────────────────────────────────────
-  // We only allow muting when the user clicked something in the card/preview
-  // area. This distinguishes user intent from YouTube's auto-muting.
+  // recentClick: true for 250 ms after any click inside a card/preview area.
+  // userHasMuted: persists across cards — carries the user's last mute choice.
   let recentClick  = false;
-  let userHasMuted = false;  // user explicitly muted this preview
-  let lastCard     = null;
+  let userHasMuted = false;
 
   document.addEventListener('click', e => {
     const path = e.composedPath ? e.composedPath() : [];
@@ -44,22 +43,6 @@
     if (inArea) {
       recentClick = true;
       setTimeout(() => { recentClick = false; }, 250);
-    }
-  }, true);
-
-  // Reset mute state when hovering a new card
-  function cardFromPath(e) {
-    const path = e.composedPath ? e.composedPath() : [];
-    for (const el of path) {
-      try { if (el.matches && el.matches(CARD_SEL)) return el; } catch (_) {}
-    }
-    return null;
-  }
-  document.addEventListener('mouseover', e => {
-    const card = cardFromPath(e);
-    if (card && card !== lastCard) {
-      lastCard     = card;
-      userHasMuted = false;   // new preview: reset state
     }
   }, true);
 
@@ -74,12 +57,19 @@
             userHasMuted = true;
             origMuted.set.call(this, true);
           } else if (userHasMuted) {
-            // YouTube re-muting a video the user already muted → honour it
+            // YouTube re-muting a video the user already muted → honour
             origMuted.set.call(this, true);
           } else {
-            // YouTube auto-muting (music or initial state) → block it
-            origMuted.set.call(this, false);
-            if (origVolume.get.call(this) < 0.01) origVolume.set.call(this, DEFAULT_VOLUME);
+            // YouTube auto-muting: allow briefly so its button UI can sync to
+            // "muted", then unmute on the next tick so it re-syncs to "unmuted".
+            origMuted.set.call(this, true);
+            const vid = this;
+            setTimeout(() => {
+              if (!userHasMuted) {
+                origMuted.set.call(vid, false);
+                if (origVolume.get.call(vid) < 0.01) origVolume.set.call(vid, DEFAULT_VOLUME);
+              }
+            }, 0);
           }
         } else {
           // Unmuting → always allow, clear user-muted flag
@@ -104,12 +94,21 @@
 
   Element.prototype.setAttribute = function (n, v) {
     if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this)) {
-      if (!recentClick && !userHasMuted) return; // block
+      if (!recentClick && !userHasMuted) {
+        // Same allow-briefly pattern: let YouTube set the attribute (and sync
+        // its button), then remove it on the next tick.
+        origSetAttr.call(this, n, v);
+        const el = this;
+        setTimeout(() => {
+          if (!userHasMuted) el.removeAttribute('muted');
+        }, 0);
+        return;
+      }
     }
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling: keeps force-unmuting unless user has muted
+  // Polling: backstop to keep videos unmuted when user hasn't chosen to mute
   setInterval(() => {
     if (userHasMuted) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
