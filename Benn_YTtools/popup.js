@@ -72,7 +72,8 @@
 
   function saveAndPreview() {
     updatePreview();
-    chrome.storage.sync.set(readForm());
+    // local has no per-minute write quota — safe to write on every input
+    chrome.storage.local.set(readForm());
   }
 
   ['playedColor', 'playedAlpha', 'unplayedColor', 'unplayedAlpha',
@@ -86,7 +87,16 @@
     }));
 
   $('resetBtn').addEventListener('click', () =>
-    chrome.storage.sync.set(DEFAULTS, () => applyForm(DEFAULTS)));
+    chrome.storage.local.set(DEFAULTS, () => applyForm(DEFAULTS)));
 
-  chrome.storage.sync.get(DEFAULTS, stored => applyForm({ ...DEFAULTS, ...stored }));
+  // Load from local, with one-time sync → local migration (see content.js).
+  function start() {
+    chrome.storage.local.get(DEFAULTS, stored => applyForm({ ...DEFAULTS, ...stored }));
+  }
+  chrome.storage.local.get('__byt_migrated', res => {
+    if (res.__byt_migrated) { start(); return; }
+    chrome.storage.sync.get(DEFAULTS, syncVals => {
+      chrome.storage.local.set({ ...syncVals, __byt_migrated: true }, start);
+    });
+  });
 })();

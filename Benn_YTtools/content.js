@@ -134,27 +134,42 @@
     }, '*');
   }
 
-  injectStyle();
-
-  chrome.storage.sync.get(DEFAULTS, stored => {
+  function startWithCfg(stored) {
     Object.assign(cfg, stored);
     postHoverSettings();
     tick();
+  }
+
+  // Storage = chrome.storage.local (NO per-minute write quota, unlike sync —
+  // sync's 120 writes/min limit was silently breaking live colour updates
+  // after a few seconds of slider dragging). One-time migration copies any
+  // previously-saved sync values into local so tuned colours carry over.
+  chrome.storage.local.get('__byt_migrated', res => {
+    if (res.__byt_migrated) {
+      chrome.storage.local.get(DEFAULTS, startWithCfg);
+    } else {
+      chrome.storage.sync.get(DEFAULTS, syncVals => {
+        chrome.storage.local.set({ ...syncVals, __byt_migrated: true }, () => {
+          chrome.storage.local.get(DEFAULTS, startWithCfg);
+        });
+      });
+    }
   });
 
-  // Primary path: instant update when popup writes to storage.
+  injectStyle();
+
+  // Primary path: instant update when popup writes to local storage.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync') return;
+    if (area !== 'local') return;
     for (const [k, { newValue }] of Object.entries(changes))
       if (k in DEFAULTS) cfg[k] = newValue;
     postHoverSettings();
   });
 
-  // Backup poll: re-reads storage every 100 ms (≥10 fps) in case onChanged
-  // goes silent after a YouTube SPA navigation. Tick() already applies cfg
-  // every rAF frame, so colours update within one frame of cfg changing.
+  // Backup poll (≥10 fps): re-reads local + re-posts hover settings to the
+  // MAIN-world patcher. Local reads are unlimited, so this can never break.
   setInterval(() => {
-    chrome.storage.sync.get(DEFAULTS, stored => {
+    chrome.storage.local.get(DEFAULTS, stored => {
       Object.assign(cfg, stored);
       postHoverSettings();
     });
