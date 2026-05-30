@@ -8,13 +8,13 @@
     unplayedAlpha: 1,
     textColor:     '#afafaf',
     textAlpha:     1,
+    fontSize:      8,
   };
 
   const BAR_ID   = '__yt_ppb_bar__';
   const TIME_ID  = '__yt_ppb_time__';
   const STYLE_ID = '__yt_ppb_style__';
-  const FONT_PX  = 8;
-  const GAP_PX   = 2; // gap between text bottom and bar top
+  const GAP_PX   = 2;
 
   let cfg = { ...DEFAULTS };
 
@@ -27,7 +27,6 @@
     if (document.getElementById(STYLE_ID)) return;
     const s = document.createElement('style');
     s.id = STYLE_ID;
-    // Force pixel-crisp rendering on our time element
     s.textContent =
       `#${TIME_ID}{` +
         `-webkit-font-smoothing:none;` +
@@ -69,8 +68,8 @@
       player.appendChild(wrap);
     }
 
-    wrap.style.background          = rgba(cfg.unplayedColor, cfg.unplayedAlpha);
-    wrap._played.style.background  = rgba(cfg.playedColor,   cfg.playedAlpha);
+    wrap.style.background         = rgba(cfg.unplayedColor, cfg.unplayedAlpha);
+    wrap._played.style.background = rgba(cfg.playedColor,   cfg.playedAlpha);
     return wrap;
   }
 
@@ -82,10 +81,8 @@
       Object.assign(el.style, {
         position:           'absolute',
         left:               '0',
-        bottom:             (1 + GAP_PX) + 'px', // 1px bar + gap
+        bottom:             (1 + GAP_PX) + 'px',
         fontFamily:         '"Courier New", Courier, monospace',
-        fontSize:           FONT_PX + 'px',
-        lineHeight:         FONT_PX + 'px',
         fontWeight:         'normal',
         fontStyle:          'normal',
         fontVariantNumeric: 'tabular-nums',
@@ -98,7 +95,9 @@
       });
       player.appendChild(el);
     }
-    el.style.color = rgba(cfg.textColor, cfg.textAlpha);
+    el.style.fontSize   = cfg.fontSize + 'px';
+    el.style.lineHeight = cfg.fontSize + 'px';
+    el.style.color      = rgba(cfg.textColor, cfg.textAlpha);
     return el;
   }
 

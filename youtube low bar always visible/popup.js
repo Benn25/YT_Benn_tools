@@ -8,6 +8,7 @@
     unplayedAlpha: 1,
     textColor:     '#afafaf',
     textAlpha:     1,
+    fontSize:      8,
   };
 
   function rgba(hex, a) {
@@ -17,6 +18,17 @@
 
   function $(id) { return document.getElementById(id); }
 
+  function getActiveSize() {
+    const btn = document.querySelector('.size-btn.active');
+    return btn ? parseInt(btn.dataset.size) : DEFAULTS.fontSize;
+  }
+
+  function setActiveSize(size) {
+    document.querySelectorAll('.size-btn').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.size) === size);
+    });
+  }
+
   function readForm() {
     return {
       playedColor:   $('playedColor').value,
@@ -25,6 +37,7 @@
       unplayedAlpha: parseFloat($('unplayedAlpha').value),
       textColor:     $('textColor').value,
       textAlpha:     parseFloat($('textAlpha').value),
+      fontSize:      getActiveSize(),
     };
   }
 
@@ -35,6 +48,7 @@
     $('unplayedAlpha').value = cfg.unplayedAlpha;
     $('textColor').value     = cfg.textColor;
     $('textAlpha').value     = cfg.textAlpha;
+    setActiveSize(cfg.fontSize);
     updatePreview();
   }
 
@@ -43,12 +57,12 @@
     $('prevPlayed').style.background   = rgba(cfg.playedColor,   cfg.playedAlpha);
     $('prevUnplayed').style.background = rgba(cfg.unplayedColor, cfg.unplayedAlpha);
     $('prevTime').style.color          = rgba(cfg.textColor,     cfg.textAlpha);
+    $('prevTime').style.fontSize       = cfg.fontSize + 'px';
     $('playedAlphaVal').textContent    = cfg.playedAlpha.toFixed(2);
     $('unplayedAlphaVal').textContent  = cfg.unplayedAlpha.toFixed(2);
     $('textAlphaVal').textContent      = cfg.textAlpha.toFixed(2);
   }
 
-  // Save to storage immediately on every change — content script picks it up via onChanged
   function saveAndPreview() {
     updatePreview();
     chrome.storage.sync.set(readForm());
@@ -56,6 +70,13 @@
 
   ['playedColor', 'playedAlpha', 'unplayedColor', 'unplayedAlpha', 'textColor', 'textAlpha']
     .forEach(id => $(id).addEventListener('input', saveAndPreview));
+
+  document.querySelectorAll('.size-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setActiveSize(parseInt(btn.dataset.size));
+      saveAndPreview();
+    });
+  });
 
   $('resetBtn').addEventListener('click', () => {
     chrome.storage.sync.set(DEFAULTS, () => applyForm(DEFAULTS));
