@@ -120,7 +120,8 @@
     if (player && video && video.duration > 0 && isFinite(video.duration)) {
       const bar = ensureBar(player);
       bar._played.style.width = (video.currentTime / video.duration * 100) + '%';
-      ensureTime(player).textContent = fmt(video.currentTime);
+      const pct = Math.round(video.currentTime / video.duration * 100);
+      ensureTime(player).textContent = fmt(video.currentTime) + ' - ' + pct + '%';
     }
     requestAnimationFrame(tick);
   }

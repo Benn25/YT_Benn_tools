@@ -30,8 +30,35 @@
   const PREV_SEL = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
   const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
 
-  const inPrev       = el => el.isConnected && !!el.closest(PREV_SEL);
-  const isMusicPrev  = el => !!el.closest('yt-video-attribute-view-model');
+  const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
+
+  // ── Music detection (geometric) ───────────────────────────────────────────
+  // The preview <video> is a SHARED overlay, never a DOM child of the music
+  // card, so closest()/querySelector from the video never find the music chip.
+  // But the overlay is positioned over the hovered card's thumbnail. So: find
+  // each music card (via its yt-video-attribute-view-model chip → owning card)
+  // and test whether the playing preview's centre falls inside that card's
+  // rectangle. The chip itself sits in the metadata area (below the thumbnail),
+  // which is why earlier chip-overlap checks failed — we must use the CARD rect.
+  const MUSIC_CHIP = 'yt-video-attribute-view-model,ytmusic-video-attribute-view-model';
+
+  function isMusicVideo(v) {
+    if (!v || !v.getBoundingClientRect) return false;
+    const vr = v.getBoundingClientRect();
+    if (!vr.width || !vr.height) return false;
+    const cx = vr.left + vr.width / 2;
+    const cy = vr.top + vr.height / 2;
+    for (const chip of document.querySelectorAll(MUSIC_CHIP)) {
+      const card = chip.closest(CARD_SEL) || chip.parentElement;
+      if (!card) continue;
+      const cr = card.getBoundingClientRect();
+      if (cr.width && cr.height &&
+          cx >= cr.left && cx <= cr.right && cy >= cr.top && cy <= cr.bottom) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   // ── Settings bridge ───────────────────────────────────────────────────────
   window.addEventListener('message', e => {
@@ -113,10 +140,16 @@
     return origSetAttr.call(this, n, v);
   };
 
-  // Polling backstop: re-enforces unmute; nudges button when it actually flips.
+  // Polling backstop: re-enforces unmute + hard 1× for music previews.
   setInterval(() => {
-    if (userHasMuted) return;
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      // Re-evaluate music status each cycle (self-corrects if play fired
+      // before the overlay was laid out) and lock music previews to 1×.
+      if (!v.paused && !v.ended) {
+        v.__bennMusic = isMusicVideo(v);
+        if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
+      }
+      if (userHasMuted) return;
       let flipped = false;
       if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
       if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
@@ -128,7 +161,8 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
-    v.playbackRate = isMusicPrev(v) ? 1 : previewSpeed;
+    v.__bennMusic = isMusicVideo(v);
+    v.playbackRate = v.__bennMusic ? 1 : previewSpeed;
   }, true);
 
   // ── Wheel shortcuts ───────────────────────────────────────────────────────
@@ -179,12 +213,13 @@
         v.currentTime + (up ? scrubStep : -scrubStep)));
       flash((up ? '+' : '−') + scrubStep + 's', e.clientX, e.clientY);
     } else {
+      // Music previews are locked at 1× — speed wheel is ignored entirely.
+      if (isMusicVideo(v)) { v.playbackRate = 1; return; }
       const newRate = Math.max(0.1,
         Math.round((v.playbackRate + (up ? speedStep : -speedStep)) * 100) / 100);
       v.playbackRate = newRate;
       flash(newRate.toFixed(2) + '×', e.clientX, e.clientY);
-      // Save new default only for regular (non-music) preview videos
-      if (inPrev(v) && !isMusicPrev(v)) {
+      if (inPrev(v)) {
         previewSpeed = newRate;
         window.postMessage({ type: '__benn_yt_save__', previewSpeed: newRate }, '*');
       }
