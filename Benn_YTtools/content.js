@@ -114,6 +114,220 @@
     return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
+  // ── Hover-preview seek bar ────────────────────────────────────────────────
+  // Since ~2026-09-21 (client 2.20260921) YouTube builds the inline hover-
+  // preview player with controlsType=0, so the old ytp progress bar is gone
+  // (#inline-preview-player gets ytp-hide-controls, no .ytp-chrome-bottom).
+  // Its replacement is a web component, <yt-inline-player-controls> holding a
+  // <yt-progress-bar>, mounted in ytd-video-preview #player-controls — which
+  // YouTube hides with `ytd-video-preview[hide-player-controls]` (preview.css
+  // overrides that). Some sessions still get no bar at all, so:
+  //   • if YouTube's <yt-progress-bar> is actually rendered → do nothing;
+  //   • otherwise draw our own bar inside #inline-preview-player
+  //     (position:relative, overflow:hidden — same as #movie_player) and seek
+  //     on click/drag.
+  // Never overlay ours on the native one: #inline-preview-player is a
+  // stacking context (z-index:0), so ours would sit UNDER the native slider,
+  // which would grab pointerdown while we swallow pointerup → YouTube's
+  // scrubber gets stuck and pauses the preview.
+  //
+  // The player sits inside <a id="media-container-link">, so every pointer
+  // event on our bar is swallowed at window-capture level (fires before every
+  // YouTube listener, and before patcher.js's document-level click tracker),
+  // otherwise a click navigates to the watch page.
+  const PBAR_ID    = '__byt_pbar__';
+  const PBAR_H     = 3;    // idle bar height (px)
+  const PBAR_H_HOT = 5;    // while hovered / dragging
+  const PBAR_HIT   = 14;   // invisible grab area above the bar
+  const PREV_PLAYER_SEL = 'ytd-video-preview .html5-video-player';
+
+  let pbarDrag = null;    // { hit, video } while the user is dragging
+  let pbarHot  = false;   // pointer currently over the grab area
+
+  function previewPlayer() {
+    return document.getElementById('inline-preview-player') ||
+           document.querySelector(PREV_PLAYER_SEL);
+  }
+
+  // True when YouTube's own <yt-progress-bar> is present AND actually painted
+  // (not display:none / visibility:hidden / opacity:0 anywhere up the tree).
+  function nativePreviewBarVisible(player) {
+    const prev = player.closest('ytd-video-preview') || player.parentElement;
+    const bar  = prev && prev.querySelector('yt-progress-bar');
+    if (!bar) return false;
+    if (bar.checkVisibility && !bar.checkVisibility({
+          opacityProperty: true, visibilityProperty: true,   // Chrome ≥ 121
+          checkOpacity:    true, checkVisibilityCSS: true,   // Chrome 105–120
+        })) return false;
+    return bar.getBoundingClientRect().height > 0;
+  }
+
+  function ensurePreviewBar(player) {
+    let hit = player.querySelector(':scope > #' + PBAR_ID);
+    if (!hit) {
+      if (getComputedStyle(player).position === 'static')
+        player.style.position = 'relative';
+
+      hit = document.createElement('div');
+      hit.id = PBAR_ID;
+      Object.assign(hit.style, {
+        position:      'absolute',
+        left:          '0',
+        bottom:        '0',
+        width:         '100%',
+        height:        PBAR_HIT + 'px',
+        zIndex:        '2147483647',
+        cursor:        'pointer',
+        pointerEvents: 'auto',
+        touchAction:   'none',
+      });
+
+      const bar = document.createElement('div');
+      Object.assign(bar.style, {
+        position:   'absolute',
+        left:       '0',
+        bottom:     '0',
+        width:      '100%',
+        height:     PBAR_H + 'px',
+        transition: 'height 0.1s',
+      });
+
+      const played = document.createElement('div');
+      Object.assign(played.style, {
+        position: 'absolute',
+        left:     '0',
+        top:      '0',
+        height:   '100%',
+        width:    '0%',
+      });
+
+      const tip = document.createElement('div');
+      Object.assign(tip.style, {
+        position:      'absolute',
+        left:          '0',
+        bottom:        (PBAR_HIT + 2) + 'px',
+        transform:     'translateX(-50%)',
+        display:       'none',
+        background:    'rgba(0,0,0,0.75)',
+        padding:       '1px 4px',
+        borderRadius:  '3px',
+        fontFamily:    '"Courier New", Courier, monospace',
+        fontSize:      '11px',
+        lineHeight:    '14px',
+        whiteSpace:    'nowrap',
+        pointerEvents: 'none',
+        userSelect:    'none',
+      });
+
+      bar.appendChild(played);
+      hit.appendChild(bar);
+      hit.appendChild(tip);
+      hit._bar    = bar;
+      hit._played = played;
+      hit._tip    = tip;
+      player.appendChild(hit);
+    }
+
+    hit._bar.style.background    = rgba(cfg.unplayedColor, cfg.unplayedAlpha);
+    hit._played.style.background = rgba(cfg.playedColor,   cfg.playedAlpha);
+    hit._tip.style.color         = rgba(cfg.textColor,     cfg.textAlpha);
+    hit._bar.style.height        = (pbarHot || pbarDrag ? PBAR_H_HOT : PBAR_H) + 'px';
+    return hit;
+  }
+
+  function pbarFromEvent(e) {
+    const path = e.composedPath ? e.composedPath() : [];
+    for (const el of path) if (el && el.id === PBAR_ID) return el;
+    return null;
+  }
+
+  function pbarVideo(hit) {
+    const v = hit.parentElement && hit.parentElement.querySelector('video');
+    return v && v.duration > 0 && isFinite(v.duration) ? v : null;
+  }
+
+  function pbarFraction(hit, e) {
+    const r = hit.getBoundingClientRect();
+    return r.width ? Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) : 0;
+  }
+
+  function pbarShowTip(hit, video, frac) {
+    const tip = hit._tip;
+    tip.textContent   = fmt(frac * video.duration);
+    tip.style.display = 'block';
+    const w = hit.clientWidth, tw = tip.offsetWidth;
+    tip.style.left = Math.max(tw / 2, Math.min(w - tw / 2, frac * w)) + 'px';
+  }
+
+  function pbarHideTip() {
+    const hit = document.getElementById(PBAR_ID);
+    if (hit && hit._tip) hit._tip.style.display = 'none';
+  }
+
+  function pbarSeek(hit, video, e) {
+    const f = pbarFraction(hit, e);
+    video.currentTime = f * video.duration;
+    hit._played.style.width = (f * 100) + '%';
+    pbarShowTip(hit, video, f);
+  }
+
+  function swallow(e) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  function onPbarPointerDown(e) {
+    const hit = pbarFromEvent(e);
+    if (!hit || e.button !== 0) return;
+    const video = pbarVideo(hit);
+    if (!video) return;
+    swallow(e);
+    pbarDrag = { hit, video };
+    try { hit.setPointerCapture(e.pointerId); } catch (_) {}
+    pbarSeek(hit, video, e);
+  }
+
+  function onPbarPointerMove(e) {
+    if (pbarDrag) { pbarSeek(pbarDrag.hit, pbarDrag.video, e); return; }
+    const hit = pbarFromEvent(e);
+    if (hit) {
+      pbarHot = true;
+      const video = pbarVideo(hit);
+      if (video) pbarShowTip(hit, video, pbarFraction(hit, e));
+    } else if (pbarHot) {
+      pbarHot = false;
+      pbarHideTip();
+    }
+  }
+
+  function onPbarPointerUp(e) {
+    if (!pbarDrag) return;
+    const { hit, video } = pbarDrag;
+    swallow(e);
+    pbarSeek(hit, video, e);
+    try { hit.releasePointerCapture(e.pointerId); } catch (_) {}
+    pbarDrag = null;
+    if (!pbarFromEvent(e)) { pbarHot = false; pbarHideTip(); }
+  }
+
+  function onPbarPointerCancel(e) {
+    if (!pbarDrag) return;
+    try { pbarDrag.hit.releasePointerCapture(e.pointerId); } catch (_) {}
+    pbarDrag = null;
+    pbarHot  = false;
+    pbarHideTip();
+  }
+
+  // Window-capture: runs before any document/element listener on the page.
+  window.addEventListener('pointerdown',   onPbarPointerDown,   true);
+  window.addEventListener('pointermove',   onPbarPointerMove,   true);
+  window.addEventListener('pointerup',     onPbarPointerUp,     true);
+  window.addEventListener('pointercancel', onPbarPointerCancel, true);
+  // Compat mouse/touch events would still reach the <a> and navigate — kill them.
+  for (const t of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'touchstart', 'touchend'])
+    window.addEventListener(t, e => { if (pbarFromEvent(e)) swallow(e); },
+      { capture: true, passive: false });
+
   function tick() {
     const player = document.getElementById('movie_player');
     const video  = player && player.querySelector('video');
@@ -122,6 +336,21 @@
       bar._played.style.width = (video.currentTime / video.duration * 100) + '%';
       const pct = Math.round(video.currentTime / video.duration * 100);
       ensureTime(player).textContent = fmt(video.currentTime) + ' - ' + pct + '%';
+    }
+
+    const pp = previewPlayer();
+    const pv = pp && pp.querySelector('video');
+    if (pp && pv && pv.duration > 0 && isFinite(pv.duration)) {
+      if (nativePreviewBarVisible(pp)) {
+        const hit = pp.querySelector(':scope > #' + PBAR_ID);
+        if (hit) hit.style.display = 'none';
+      } else {
+        const hit = ensurePreviewBar(pp);
+        hit.style.display = 'block';
+        // While dragging, pbarSeek() already paints the target position; don't
+        // let a not-yet-seeked currentTime snap the bar back for a frame.
+        if (!pbarDrag) hit._played.style.width = (pv.currentTime / pv.duration * 100) + '%';
+      }
     }
     requestAnimationFrame(tick);
   }
