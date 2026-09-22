@@ -10,3 +10,11 @@ ytd-video-preview[hide-player-controls] #player-controls.ytd-video-preview,
 ytd-video-preview[hide-player-controls] #player-controls {
   display: block !important;
 }
+
+/* SponsorBlock (6.x) prepends <ul id="previewbar"> into
+ * "#video-preview .ytp-progress-bar" — content.js gives its fallback bar that
+ * class. SponsorBlock's transform is tuned for YouTube's 5px bar; keep the
+ * overlay flush with ours instead. */
+#video-preview .ytp-progress-bar > #previewbar {
+  transform: none !important;
+}
