@@ -149,17 +149,21 @@
            document.querySelector(PREV_PLAYER_SEL);
   }
 
-  // True when YouTube's own <yt-progress-bar> is present AND actually painted
-  // (not display:none / visibility:hidden / opacity:0 anywhere up the tree).
-  function nativePreviewBarVisible(player) {
-    const prev = player.closest('ytd-video-preview') || player.parentElement;
-    const bar  = prev && prev.querySelector('yt-progress-bar');
-    if (!bar) return false;
-    if (bar.checkVisibility && !bar.checkVisibility({
+  // Painted at all? (not display:none / visibility:hidden / opacity:0
+  // anywhere up the tree)
+  function isShown(el) {
+    if (el.checkVisibility && !el.checkVisibility({
           opacityProperty: true, visibilityProperty: true,   // Chrome ≥ 121
           checkOpacity:    true, checkVisibilityCSS: true,   // Chrome 105–120
         })) return false;
-    return bar.getBoundingClientRect().height > 0;
+    return el.getBoundingClientRect().height > 0;
+  }
+
+  // True when YouTube's own <yt-progress-bar> is present AND actually painted.
+  function nativePreviewBarVisible(player) {
+    const prev = player.closest('ytd-video-preview') || player.parentElement;
+    const bar  = prev && prev.querySelector('yt-progress-bar');
+    return !!bar && isShown(bar);
   }
 
   function ensurePreviewBar(player) {
@@ -182,13 +186,20 @@
         touchAction:   'none',
       });
 
+      // SponsorBlock (6.x) attaches its segment overlay to
+      // "#video-preview .ytp-progress-bar" — the class YouTube's old inline
+      // bar carried. Reusing it here brings the coloured segments back.
+      // YouTube's player CSS still styles .ytp-progress-bar (scaleY(.6),
+      // position:relative, height:100%), so pin those inline.
       const bar = document.createElement('div');
+      bar.className = 'ytp-progress-bar';
       Object.assign(bar.style, {
         position:   'absolute',
         left:       '0',
         bottom:     '0',
         width:      '100%',
         height:     PBAR_H + 'px',
+        transform:  'none',
         transition: 'height 0.1s',
       });
 
@@ -341,7 +352,10 @@
     const pp = previewPlayer();
     const pv = pp && pp.querySelector('video');
     if (pp && pv && pv.duration > 0 && isFinite(pv.duration)) {
-      if (nativePreviewBarVisible(pp)) {
+      // Hidden while the preview is faded out/inactive too: otherwise
+      // SponsorBlock would keep treating our (invisible) bar as the hover
+      // preview's and never move its overlay back to the main player.
+      if (nativePreviewBarVisible(pp) || !isShown(pp)) {
         const hit = pp.querySelector(':scope > #' + PBAR_ID);
         if (hit) hit.style.display = 'none';
       } else {
