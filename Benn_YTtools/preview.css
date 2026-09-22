@@ -1,0 +1,12 @@
+/* Benn YT Tools — preview.css
+ * YouTube (client 2.20260921+) replaced the inline hover-preview progress bar
+ * with a web component (<yt-inline-player-controls> / <yt-progress-bar>) that
+ * lives in ytd-video-preview #player-controls, and hides that container with:
+ *   ytd-video-preview[hide-player-controls] #player-controls { display: none }
+ * Keep it visible so the genuine (draggable, storyboard-on-hover) bar shows.
+ * content.js only draws its own fallback bar when this one is not rendered.
+ */
+ytd-video-preview[hide-player-controls] #player-controls.ytd-video-preview,
+ytd-video-preview[hide-player-controls] #player-controls {
+  display: block !important;
+}
