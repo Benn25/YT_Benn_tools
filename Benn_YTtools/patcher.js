@@ -141,19 +141,32 @@
   };
 
   // Polling backstop: re-enforces unmute + hard 1× for music previews.
+  // Each element is handled in its own try/catch: on watch pages the
+  // selector can match a <video> that is not a native media element (the
+  // native getter throws "Illegal invocation"), and one bad element must
+  // not abort the whole poll or flood the extension's error log.
+  let pollWarned = false;
   setInterval(() => {
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
-      // Re-evaluate music status each cycle (self-corrects if play fired
-      // before the overlay was laid out) and lock music previews to 1×.
-      if (!v.paused && !v.ended) {
-        v.__bennMusic = isMusicVideo(v);
-        if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
+      if (!(v instanceof HTMLMediaElement)) return;
+      try {
+        // Re-evaluate music status each cycle (self-corrects if play fired
+        // before the overlay was laid out) and lock music previews to 1×.
+        if (!v.paused && !v.ended) {
+          v.__bennMusic = isMusicVideo(v);
+          if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
+        }
+        if (userHasMuted) return;
+        let flipped = false;
+        if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
+        if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
+        if (flipped) syncMuteButton(v);
+      } catch (err) {
+        if (!pollWarned) {
+          pollWarned = true;
+          console.warn('[Benn YT Tools] preview poll: skipping element', v, err);
+        }
       }
-      if (userHasMuted) return;
-      let flipped = false;
-      if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
-      if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
-      if (flipped) syncMuteButton(v);
     });
   }, POLL_MS);
 

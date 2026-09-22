@@ -386,7 +386,7 @@
     if (!e.data || e.data.type !== '__benn_yt_save__') return;
     const { previewSpeed: ps } = e.data;
     if (typeof ps === 'number' && ps >= 0.5 && ps <= 3) {
-      chrome.storage.local.set({ previewSpeed: ps });
+      try { chrome.storage.local.set({ previewSpeed: ps }); } catch (_) {}
     }
   });
 
@@ -423,12 +423,21 @@
   });
 
   // Backup poll (≥10 fps): re-reads local + re-posts hover settings to the
-  // MAIN-world patcher. Local reads are unlimited, so this can never break.
-  setInterval(() => {
-    chrome.storage.local.get(DEFAULTS, stored => {
-      Object.assign(cfg, stored);
-      postHoverSettings();
-    });
+  // MAIN-world patcher. Local reads are unlimited, so this can never break —
+  // except after the extension is reloaded/updated while this tab is open:
+  // chrome.runtime.id becomes undefined and any chrome.* call throws
+  // "Extension context invalidated". Stop polling then; the new content
+  // script instance takes over on the next page load.
+  const settingsPoll = setInterval(() => {
+    if (!chrome.runtime || !chrome.runtime.id) { clearInterval(settingsPoll); return; }
+    try {
+      chrome.storage.local.get(DEFAULTS, stored => {
+        Object.assign(cfg, stored);
+        postHoverSettings();
+      });
+    } catch (_) {
+      clearInterval(settingsPoll);
+    }
   }, 100);
 
 })();
