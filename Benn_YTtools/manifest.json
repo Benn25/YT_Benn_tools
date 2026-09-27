@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Benn YT Tools",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Persistent progress bar + hover preview unmute, seek bar, like button & wheel shortcuts for YouTube.",
   "permissions": ["storage"],
   "action": {

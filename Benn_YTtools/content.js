@@ -12,6 +12,7 @@
     scrubStep:     5,
     speedStep:     0.2,
     previewSpeed:  1.5,
+    captionsOn:    false,
   };
 
   const BAR_ID   = '__byt_bar__';
@@ -377,6 +378,7 @@
       scrubStep:    cfg.scrubStep,
       speedStep:    cfg.speedStep,
       previewSpeed: cfg.previewSpeed,
+      captionsOn:   cfg.captionsOn,
     }, '*');
   }
 
@@ -384,9 +386,12 @@
   window.addEventListener('message', e => {
     if (e.source !== window) return;
     if (!e.data || e.data.type !== '__benn_yt_save__') return;
-    const { previewSpeed: ps } = e.data;
+    const { previewSpeed: ps, captionsOn: cc } = e.data;
     if (typeof ps === 'number' && ps >= 0.5 && ps <= 3) {
       try { chrome.storage.local.set({ previewSpeed: ps }); } catch (_) {}
+    }
+    if (typeof cc === 'boolean') {
+      try { chrome.storage.local.set({ captionsOn: cc }); } catch (_) {}
     }
   });
 

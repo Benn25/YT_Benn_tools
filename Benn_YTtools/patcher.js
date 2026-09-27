@@ -22,6 +22,7 @@
   let scrubStep    = 5;
   let speedStep    = 0.2;
   let previewSpeed = 1.5;
+  let captionsOn   = false;   // remembered choice for the CC button below
 
   const origMuted   = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
   const origVolume  = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
@@ -30,6 +31,8 @@
   const PREV_SEL = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
   const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
   const LIKE_ID  = '__byt_like__';
+  const CC_ID    = '__byt_cc__';
+  const CTL_SEL  = '#' + LIKE_ID + ',#' + CC_ID;   // our own overlay controls
 
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
@@ -66,10 +69,11 @@
     if (e.source !== window) return;
     if (!e.data) return;
     if (e.data.type === '__benn_yt_settings__') {
-      const { scrubStep: s, speedStep: sp, previewSpeed: ps } = e.data;
+      const { scrubStep: s, speedStep: sp, previewSpeed: ps, captionsOn: cc } = e.data;
       if (typeof s  === 'number' && s  >= 1    && s  <= 15)  scrubStep    = s;
       if (typeof sp === 'number' && sp >= 0.05 && sp <= 0.5) speedStep    = sp;
       if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
+      if (typeof cc === 'boolean')                           captionsOn   = cc;
     }
   });
 
@@ -88,6 +92,9 @@
 
   document.addEventListener('click', e => {
     const path = e.composedPath ? e.composedPath() : [];
+    // Our own buttons live inside the thumbnail, so they are "in a card" too —
+    // clicking them must not be mistaken for opening the video.
+    if (pathHas(path, CTL_SEL)) return;
     if (!pathHas(path, CARD_SEL + ',' + PREV_SEL)) return;
     // Opening the video — no preview may outlive the click.
     setTimeout(stopAllPreviews, 0);
@@ -147,7 +154,7 @@
     // The like button floats over the thumbnail on document.body, so without
     // this the preview would be treated as stray while the pointer is on it.
     try {
-      return !!(el.closest(PREV_SEL) || el.closest(CARD_SEL) || el.closest('#' + LIKE_ID));
+      return !!(el.closest(PREV_SEL) || el.closest(CARD_SEL) || el.closest(CTL_SEL));
     } catch (_) { return false; }
   }
 
@@ -381,6 +388,7 @@
   const LIKE_COLOR = '#3ea6ff';   // YouTube's own accent blue
   const liked   = new Set();      // videoIds liked during this page session
   let likeBtn   = null;
+  let ccBtn     = null;
   let likeCard  = null;           // card the button is currently attached to
   let likeBusy  = false;
 
@@ -467,7 +475,7 @@
   for (const type of ['mouseout', 'mouseleave', 'pointerout', 'pointerleave']) {
     document.addEventListener(type, e => {
       const to = e.relatedTarget;
-      if (to && to.closest && to.closest('#' + LIKE_ID)) e.stopPropagation();
+      if (to && to.closest && to.closest(CTL_SEL)) e.stopPropagation();
     }, true);
   }
 
@@ -525,31 +533,51 @@
     const r = thumb.getBoundingClientRect();
     if (!r.width || !r.height) { btn.style.display = 'none'; return; }
 
-    // Host it in the thumbnail (so the pointer never leaves the card as far
+    // Host them in the thumbnail (so the pointer never leaves the card as far
     // as YouTube is concerned), positioned relative to that host.
     const host = thumb;
-    if (btn.parentElement !== host) host.appendChild(btn);
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
     const hr = host.getBoundingClientRect();
+    const top  = r.top  - hr.top  + 8;
+    const left = r.left - hr.left + 8;
+
+    if (btn.parentElement !== host) host.appendChild(btn);
     btn.style.position = 'absolute';
-    btn.style.top      = (r.top - hr.top + 8) + 'px';
-    btn.style.left     = (r.left - hr.left + 8) + 'px';
+    btn.style.top      = top + 'px';
+    btn.style.left     = left + 'px';
     btn.style.display  = 'flex';
+
+    const cc = ensureCcBtn();
+    if (cc) {
+      if (cc.parentElement !== host) host.appendChild(cc);
+      setCcIcon(captionsOn);
+      cc.style.position = 'absolute';
+      cc.style.top      = top + 'px';
+      cc.style.left     = (left + 36) + 'px';
+      cc.style.display  = 'flex';
+    }
 
     // If a layout does clip it after all, fall back to floating on the body.
     const br = btn.getBoundingClientRect();
-    let top = null;
-    try { top = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2); } catch (_) {}
-    if (top && !btn.contains(top) && top !== btn) {
+    let topEl = null;
+    try { topEl = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2); } catch (_) {}
+    if (topEl && !btn.contains(topEl) && topEl !== btn) {
       document.body.appendChild(btn);
       btn.style.position = 'fixed';
       btn.style.top      = (r.top + 8) + 'px';
       btn.style.left     = (r.left + 8) + 'px';
+      if (cc) {
+        document.body.appendChild(cc);
+        cc.style.position = 'fixed';
+        cc.style.top      = (r.top + 8) + 'px';
+        cc.style.left     = (r.left + 44) + 'px';
+      }
     }
   }
 
   function hideLikeBtn() {
     if (likeBtn) likeBtn.style.display = 'none';
+    if (ccBtn)   ccBtn.style.display   = 'none';
     likeCard = null;
   }
 
@@ -575,6 +603,79 @@
 
   // Keep it glued to the card while scrolling, and take it away once the
   // pointer is neither on the card nor on the button itself.
+  // ── Captions toggle on thumbnails ────────────────────────────────────────
+  // YouTube emptied the inline preview controls (the container is still
+  // rendered, but with no mute and no CC button in it), so previews lost
+  // captions entirely. The player API is untouched though — verified on the
+  // live player: loadModule('captions'), toggleSubtitles(), isSubtitlesOn()
+  // and getOption/setOption('captions', …) all still work. So we drive it
+  // ourselves, and remember the choice for every later preview.
+
+  function captionsAreOn(mp) {
+    try { return !!(mp && mp.isSubtitlesOn && mp.isSubtitlesOn()); } catch (_) { return false; }
+  }
+
+  function applyCaptions(mp, on) {
+    if (!mp) return;
+    try { if (mp.loadModule) mp.loadModule('captions'); } catch (_) {}
+    try {
+      if (on && mp.toggleSubtitlesOn)      mp.toggleSubtitlesOn();
+      else if (captionsAreOn(mp) !== on && mp.toggleSubtitles) mp.toggleSubtitles();
+    } catch (_) {}
+  }
+
+  function setCcIcon(on) {
+    if (!ccBtn) return;
+    ccBtn.style.color      = on ? '#000' : '#fff';
+    ccBtn.style.background = on ? LIKE_COLOR : 'rgba(0,0,0,0.65)';
+    ccBtn.style.outline    = '1px solid ' + (on ? LIKE_COLOR : 'rgba(255,255,255,0.25)');
+  }
+
+  function onCcClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    captionsOn = !captionsOn;
+    setCcIcon(captionsOn);
+    applyCaptions(previewPlayer(), captionsOn);
+    // Captions can take a moment to attach after the module loads.
+    setTimeout(() => applyCaptions(previewPlayer(), captionsOn), 600);
+    window.postMessage({ type: '__benn_yt_save__', captionsOn }, '*');
+    const r = ccBtn.getBoundingClientRect();
+    flash(captionsOn ? 'Captions on' : 'Captions off', r.left + r.width / 2, r.top - 18);
+  }
+
+  function ensureCcBtn() {
+    if (ccBtn) return ccBtn;
+    if (!document.body) return null;
+    ccBtn = document.createElement('div');
+    ccBtn.id = CC_ID;
+    ccBtn.setAttribute('role', 'button');
+    ccBtn.setAttribute('title', 'Subtitles/CC on previews (Benn YT Tools)');
+    ccBtn.textContent = 'CC';
+    ccBtn.setAttribute('style',
+      'position:absolute;z-index:2147483647;display:none;align-items:center;justify-content:center;' +
+      'width:30px;height:30px;border-radius:50%;cursor:pointer;' +
+      'font:700 11px Roboto,Arial,sans-serif;letter-spacing:0.5px;' +
+      'background:rgba(0,0,0,0.65);outline:1px solid rgba(255,255,255,0.25);' +
+      'transition:transform 0.1s,background 0.1s');
+    ccBtn.addEventListener('mouseenter', () => { ccBtn.style.transform = 'scale(1.12)'; });
+    ccBtn.addEventListener('mouseleave', () => { ccBtn.style.transform = 'none'; });
+    ccBtn.addEventListener('click', onCcClick, true);
+    ccBtn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+    setCcIcon(captionsOn);
+    document.body.appendChild(ccBtn);
+    return ccBtn;
+  }
+
+  // Every preview that starts inherits the remembered choice.
+  document.addEventListener('play', e => {
+    const v = e.target;
+    if (!(v instanceof HTMLVideoElement) || !inPrev(v) || !captionsOn) return;
+    const mp = playerOf(v);
+    applyCaptions(mp, true);
+    setTimeout(() => applyCaptions(mp, true), 600);
+  }, true);
+
   setInterval(() => {
     if (!likeCard || !likeBtn || likeBtn.style.display === 'none') return;
     if (!likeCard.isConnected) { hideLikeBtn(); return; }
@@ -583,7 +684,7 @@
       try {
         const el = document.elementFromPoint(ptrX, ptrY);
         over = !!(el && el.closest &&
-                 (el.closest('#' + LIKE_ID) || (likeCard.contains(el) || el.closest(PREV_SEL))));
+                 (el.closest(CTL_SEL) || (likeCard.contains(el) || el.closest(PREV_SEL))));
       } catch (_) {}
     }
     if (over) positionLikeBtn(likeCard); else hideLikeBtn();
