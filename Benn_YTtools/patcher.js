@@ -73,28 +73,116 @@
   });
 
   // ── User-click detection ──────────────────────────────────────────────────
+  // Only a click on an actual mute control means "the user wants silence".
+  // Every other click on a card is the user OPENING the video: treat that as
+  // a teardown instead. Counting it as a mute (what we used to do) had two
+  // bad effects — the mute YouTube applies while navigating was recorded as
+  // the user's choice, silencing every later preview, and the preview kept
+  // playing over the watch page.
+  const MUTE_BTN_SEL = 'ytm-mute-button,yt-mute-toggle-button,' +
+                       '.ytmMuteButtonHost,.ytmMuteButtonButton,.ytp-mute-button';
   let recentClick  = false;
   let userHasMuted = false;
 
+  function pathHas(path, sel) {
+    for (const el of path) {
+      try { if (el.matches && el.matches(sel)) return true; } catch (_) {}
+    }
+    return false;
+  }
+
   document.addEventListener('click', e => {
     const path = e.composedPath ? e.composedPath() : [];
-    const inArea = path.some(el => {
-      try { return el.matches && (el.matches(CARD_SEL) || el.matches(PREV_SEL)); } catch (_) {}
-    });
-    if (inArea) {
+    if (!pathHas(path, CARD_SEL + ',' + PREV_SEL)) return;
+    if (pathHas(path, MUTE_BTN_SEL)) {
       recentClick = true;
       setTimeout(() => { recentClick = false; }, 250);
+    } else {
+      // Opening the video — no preview may outlive the click.
+      setTimeout(stopAllPreviews, 0);
     }
   }, true);
 
-  // ── Button sync (guarded, loop-proof) ────────────────────────────────────
+  // ── Player-state sync (guarded, loop-proof) ──────────────────────────────
+  // Forcing element.muted = false leaves YouTube's own player object still
+  // believing it is muted (verified: isMuted() === true while the element
+  // plays audio). That stale belief is what YouTube carries over to the watch
+  // page, which is why a clicked video sometimes starts muted. unMute() puts
+  // the player object back in sync; the synthetic volumechange stays as the
+  // fallback that at least refreshes the mute button.
   let syncing = false;
+
+  function playerOf(v) {
+    try { return v.closest ? v.closest('.html5-video-player') : null; } catch (_) { return null; }
+  }
+
   function syncMuteButton(v) {
     if (syncing) return;
     syncing = true;
-    try { v.dispatchEvent(new Event('volumechange', { bubbles: true, composed: true })); } catch (_) {}
+    const mp = playerOf(v);
+    try {
+      if (mp && typeof mp.unMute === 'function' &&
+          (typeof mp.isMuted !== 'function' || mp.isMuted())) {
+        mp.unMute();
+      } else {
+        v.dispatchEvent(new Event('volumechange', { bubbles: true, composed: true }));
+      }
+    } catch (_) {
+      try { v.dispatchEvent(new Event('volumechange', { bubbles: true, composed: true })); } catch (__) {}
+    }
     syncing = false;
   }
+
+  // ── Preview lifecycle guard ──────────────────────────────────────────────
+  // YouTube only tears a preview down when the pointer LEAVES the card, so if
+  // the pointer never moves — Ctrl+Tab to another tab, alt-tab to another app,
+  // or simply parking the mouse on the thumbnail — the preview plays on.
+  // YouTube keeps previews muted so it never notices; we unmute them, so it
+  // means audio from a thumbnail nobody is looking at (and a second soundtrack
+  // over the video you then open). Enforce the rule ourselves: a preview may
+  // only play while the window is focused, the tab visible, and the pointer
+  // over a card or preview.
+  const STRAY_GRACE_MS = 700;   // previews start playing before they are shown
+
+  let ptrX = -1, ptrY = -1;
+  document.addEventListener('mousemove', e => { ptrX = e.clientX; ptrY = e.clientY; }, true);
+  // relatedTarget === null ⇒ the pointer left the window entirely.
+  document.addEventListener('mouseout', e => { if (!e.relatedTarget) ptrX = ptrY = -1; }, true);
+
+  function pointerOverCard() {
+    if (ptrX < 0) return false;
+    let el = null;
+    try { el = document.elementFromPoint(ptrX, ptrY); } catch (_) {}
+    if (!el || !el.closest) return false;
+    try { return !!(el.closest(PREV_SEL) || el.closest(CARD_SEL)); } catch (_) { return false; }
+  }
+
+  function previewsAllowed() {
+    return !document.hidden && document.hasFocus() && pointerOverCard();
+  }
+
+  function stopPreview(v, hard) {
+    const mp = playerOf(v);
+    try {
+      if (mp && typeof mp.stopVideo === 'function')       mp.stopVideo();   // YouTube's own teardown
+      else if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+      else v.pause();
+    } catch (_) {
+      try { v.pause(); } catch (__) {}
+    }
+    // Escalation, if something keeps resuming it: silence it outright.
+    if (hard) { try { origMuted.set.call(v, true); } catch (_) {} }
+  }
+
+  function stopAllPreviews() {
+    document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      if (v instanceof HTMLMediaElement && !v.paused) stopPreview(v, true);
+    });
+  }
+
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopAllPreviews(); });
+  window.addEventListener('blur',     stopAllPreviews);
+  window.addEventListener('pagehide', stopAllPreviews);
 
   // ── Audio patches ─────────────────────────────────────────────────────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
@@ -147,15 +235,32 @@
   // not abort the whole poll or flood the extension's error log.
   let pollWarned = false;
   setInterval(() => {
+    const allowed = previewsAllowed();
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
       if (!(v instanceof HTMLMediaElement)) return;
       try {
+        const playing = !v.paused && !v.ended;
         // Re-evaluate music status each cycle (self-corrects if play fired
         // before the overlay was laid out) and lock music previews to 1×.
-        if (!v.paused && !v.ended) {
+        if (playing) {
           v.__bennMusic = isMusicVideo(v);
           if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
         }
+        // Stray playback: stop it, and never unmute it in the meantime.
+        if (playing && !allowed) {
+          if (!v.__bennStrayAt) v.__bennStrayAt = Date.now();
+          if (Date.now() - v.__bennStrayAt >= STRAY_GRACE_MS) {
+            v.__bennStops = (v.__bennStops || 0) + 1;
+            // Retry a few times only. If YouTube keeps resuming it anyway,
+            // the hard mute keeps it silent without hammering stopVideo()
+            // eight times a second for as long as the page lives.
+            if (v.__bennStops <= 5) stopPreview(v, v.__bennStops > 1);
+            else if (!origMuted.get.call(v)) origMuted.set.call(v, true);
+          }
+          return;
+        }
+        v.__bennStrayAt = 0;
+        if (playing) v.__bennStops = 0;
         if (userHasMuted) return;
         let flipped = false;
         if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
