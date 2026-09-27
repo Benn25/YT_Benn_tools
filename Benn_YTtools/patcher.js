@@ -158,8 +158,14 @@
     } catch (_) { return false; }
   }
 
+  // Focus deliberately plays no part: hovering a thumbnail in an unfocused
+  // window should still play, with sound. What must hold is that the video
+  // is really on screen under the pointer — and it is: document.hidden
+  // covers a background tab, and Chrome/Brave also report a window that is
+  // fully covered by another app as hidden (native occlusion tracking),
+  // while the pointer being over the thumbnail means that spot is on top.
   function previewsAllowed() {
-    return !document.hidden && document.hasFocus() && pointerOverCard();
+    return !document.hidden && pointerOverCard();
   }
 
   // Silence is element-level only: muting through the player API would be
@@ -189,21 +195,13 @@
     });
   }
 
-  function muteAllPreviews() {
-    document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
-      if (v instanceof HTMLMediaElement) mutePreview(v);
-    });
-  }
-
   // A hidden tab cannot be hovered, so stopping is safe and invisible there.
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopAllPreviews(); });
   window.addEventListener('pagehide', stopAllPreviews);
-  // Losing focus only silences. The window may still be visible with the
-  // pointer resting on a thumbnail (Brave on one screen, another app focused)
-  // — YouTube legitimately shows a preview there, and tearing it down mid-play
-  // is what produced the black tile. If the pointer really has left the card,
-  // the poll below stops it anyway.
-  window.addEventListener('blur', muteAllPreviews);
+  // Nothing is done on window blur: alt-tabbing away while the pointer rests
+  // on a thumbnail leaves the preview visible on screen, so it keeps playing
+  // with sound. Moving the pointer off it, hiding the tab or covering the
+  // window all still stop it through the rules above.
 
   // ── Audio patches ─────────────────────────────────────────────────────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
@@ -282,7 +280,7 @@
           return;
         }
         v.__bennStrayAt = 0;
-        if (playing) v.__bennStops = 0;
+        if (playing) { v.__bennStops = 0; enforceCaptions(v); }
         let flipped = false;
         if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
         if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
@@ -386,9 +384,12 @@
   // clicking a liked one again removes the like.
 
   const LIKE_COLOR = '#3ea6ff';   // YouTube's own accent blue
-  const liked   = new Set();      // videoIds liked during this page session
+  const liked   = new Set();      // videoIds known to be liked
+  const likeKnown = new Map();    // videoId → true/false, from YouTube
+  let   likeProbe = 0;            // debounce token for the lookup below
   let likeBtn   = null;
   let ccBtn     = null;
+  let likeLookupTimer = 0;
   let likeCard  = null;           // card the button is currently attached to
   let likeBusy  = false;
 
@@ -417,28 +418,68 @@
     return 'SAPISIDHASH ' + ts + '_' + hex;
   }
 
-  async function sendLike(videoId, remove) {
+  // YouTube does not say in the home-page data whether you already liked a
+  // video, so ask for it: /youtubei/v1/next carries the like button's state.
+  // One request per video, cached for the session, fired only after the
+  // pointer has settled on a card.
+  function findLikeStatus(o, depth) {
+    if (!o || depth > 12 || typeof o !== 'object') return null;
+    if (Array.isArray(o)) {
+      for (const it of o) { const r = findLikeStatus(it, depth + 1); if (r) return r; }
+      return null;
+    }
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if (k === 'likeStatus' && typeof v === 'string') return v;
+      const r = findLikeStatus(v, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  async function innertube(path, body) {
     const key     = ytcfg.get('INNERTUBE_API_KEY');
     const context = ytcfg.get('INNERTUBE_CONTEXT');
     if (!key || !context) throw new Error('no InnerTube config');
-
     const headers = {
-      'Content-Type':   'application/json',
-      'X-Origin':       location.origin,
+      'Content-Type':    'application/json',
+      'X-Origin':        location.origin,
       'X-Goog-AuthUser': String(ytcfg.get('SESSION_INDEX') || 0),
     };
     const auth = await sapisidHash();
     if (auth) headers['Authorization'] = auth;
     const pageId = ytcfg.get('DELEGATED_SESSION_ID');
     if (pageId) headers['X-Goog-PageId'] = pageId;
-
-    const res = await fetch(
-      '/youtubei/v1/like/' + (remove ? 'removelike' : 'like') +
-      '?key=' + encodeURIComponent(key) + '&prettyPrint=false',
+    const res = await fetch('/youtubei/v1/' + path +
+                            '?key=' + encodeURIComponent(key) + '&prettyPrint=false',
       { method: 'POST', credentials: 'same-origin', headers,
-        body: JSON.stringify({ context, target: { videoId } }) });
+        body: JSON.stringify(Object.assign({ context }, body)) });
     if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()).slice(0, 120));
     return res;
+  }
+
+  async function refreshLikeState(videoId, card) {
+    if (likeKnown.has(videoId)) {
+      if (likeCard === card) setLikeIcon(likeKnown.get(videoId));
+      return;
+    }
+    const token = ++likeProbe;
+    try {
+      const res  = await innertube('next', { videoId });
+      const data = await res.json();
+      const st   = findLikeStatus(data, 0);
+      const isLiked = st === 'LIKE';
+      likeKnown.set(videoId, isLiked);
+      if (isLiked) liked.add(videoId); else liked.delete(videoId);
+      // Only paint if this is still the hovered card and no newer probe ran.
+      if (token === likeProbe && likeCard === card) setLikeIcon(isLiked);
+    } catch (err) {
+      console.warn('[Benn YT Tools] like state lookup failed:', err);
+    }
+  }
+
+  async function sendLike(videoId, remove) {
+    return innertube('like/' + (remove ? 'removelike' : 'like'), { target: { videoId } });
   }
 
   function thumbIcon(on) {
@@ -515,6 +556,7 @@
     try {
       await sendLike(id, remove);
       if (remove) liked.delete(id); else liked.add(id);
+      likeKnown.set(id, !remove);
       setLikeIcon(!remove);
       flash(remove ? 'Like removed' : 'Liked', r.left + r.width / 2, r.top - 18);
     } catch (err) {
@@ -597,6 +639,11 @@
       likeCard = card;
       const id = videoIdOf(card);
       setLikeIcon(!!id && liked.has(id));
+      // Ask YouTube whether it is already liked, once the pointer settles.
+      if (id) {
+        clearTimeout(likeLookupTimer);
+        likeLookupTimer = setTimeout(() => refreshLikeState(id, card), 300);
+      }
     }
     positionLikeBtn(card);
   }, true);
@@ -615,13 +662,47 @@
     try { return !!(mp && mp.isSubtitlesOn && mp.isSubtitlesOn()); } catch (_) { return false; }
   }
 
+  // Turning captions ON also flips YouTube's own "subtitles" preference, so
+  // every later preview comes back with captions whatever our button says.
+  // OFF therefore has to be enforced too — clearing the track is YouTube's
+  // documented way of switching them off — and the poll re-applies the
+  // chosen state to each preview, which is what makes the button a toggle
+  // rather than a one-way switch.
+  // Only load the module when it is not already there: calling loadModule on
+  // a player that has captions loaded resets them (measured — it switched a
+  // live caption track back off), which would fight our own enforcement.
+  function captionsModuleReady(mp) {
+    try {
+      const o = mp.getOptions && mp.getOptions();
+      return !!(o && o.indexOf('captions') !== -1);
+    } catch (_) { return false; }
+  }
+
   function applyCaptions(mp, on) {
     if (!mp) return;
-    try { if (mp.loadModule) mp.loadModule('captions'); } catch (_) {}
     try {
-      if (on && mp.toggleSubtitlesOn)      mp.toggleSubtitlesOn();
-      else if (captionsAreOn(mp) !== on && mp.toggleSubtitles) mp.toggleSubtitles();
+      if (on) {
+        if (!captionsModuleReady(mp) && mp.loadModule) mp.loadModule('captions');
+        if (!captionsAreOn(mp)) {
+          if (mp.toggleSubtitlesOn)   mp.toggleSubtitlesOn();
+          else if (mp.toggleSubtitles) mp.toggleSubtitles();
+        }
+      } else {
+        if (mp.setOption) mp.setOption('captions', 'track', {});
+        if (captionsAreOn(mp) && mp.toggleSubtitles) mp.toggleSubtitles();
+      }
     } catch (_) {}
+  }
+
+  // Keep every playing preview on the chosen setting (throttled per player).
+  function enforceCaptions(v) {
+    const mp = playerOf(v);
+    if (!mp || !mp.isSubtitlesOn) return;
+    if (captionsAreOn(mp) === captionsOn) { v.__bennCcAt = 0; return; }
+    const now = Date.now();
+    if (v.__bennCcAt && now - v.__bennCcAt < 700) return;
+    v.__bennCcAt = now;
+    applyCaptions(mp, captionsOn);
   }
 
   function setCcIcon(on) {
@@ -636,7 +717,12 @@
     e.stopPropagation();
     captionsOn = !captionsOn;
     setCcIcon(captionsOn);
-    applyCaptions(previewPlayer(), captionsOn);
+    // Apply to every preview player present, not just the active one, so a
+    // second preview cannot come back with the old setting.
+    document.querySelectorAll(PREV_SEL + ' .html5-video-player').forEach(mp => {
+      applyCaptions(mp, captionsOn);
+      if (mp.querySelector) { const v = mp.querySelector('video'); if (v) v.__bennCcAt = 0; }
+    });
     // Captions can take a moment to attach after the module loads.
     setTimeout(() => applyCaptions(previewPlayer(), captionsOn), 600);
     window.postMessage({ type: '__benn_yt_save__', captionsOn }, '*');
@@ -667,13 +753,14 @@
     return ccBtn;
   }
 
-  // Every preview that starts inherits the remembered choice.
+  // Every preview that starts inherits the remembered choice, in both
+  // directions (the poll keeps it there if YouTube changes its mind later).
   document.addEventListener('play', e => {
     const v = e.target;
-    if (!(v instanceof HTMLVideoElement) || !inPrev(v) || !captionsOn) return;
+    if (!(v instanceof HTMLVideoElement) || !inPrev(v)) return;
     const mp = playerOf(v);
-    applyCaptions(mp, true);
-    setTimeout(() => applyCaptions(mp, true), 600);
+    applyCaptions(mp, captionsOn);
+    setTimeout(() => applyCaptions(mp, captionsOn), 600);
   }, true);
 
   setInterval(() => {
