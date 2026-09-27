@@ -415,7 +415,8 @@
     return 'SAPISIDHASH ' + ts + '_' + hex;
   }
 
-  // NOTE: asking YouTube whether a video is already liked does not work.
+  // NOTE: liking works — a like sent from this button was confirmed landing
+  // in the account's Liked videos list. Only reading state back fails:
   // /youtubei/v1/next answers INDIFFERENT for videos that are demonstrably in
   // the account's Liked list — tested against that list in the signed-in
   // browser, with every auth variant (SAPISIDHASH / SAPISID1PHASH /
