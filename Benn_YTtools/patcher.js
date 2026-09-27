@@ -29,6 +29,7 @@
 
   const PREV_SEL = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
   const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
+  const LIKE_ID  = '__byt_like__';
 
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
@@ -154,7 +155,11 @@
     let el = null;
     try { el = document.elementFromPoint(ptrX, ptrY); } catch (_) {}
     if (!el || !el.closest) return false;
-    try { return !!(el.closest(PREV_SEL) || el.closest(CARD_SEL)); } catch (_) { return false; }
+    // The like button floats over the thumbnail on document.body, so without
+    // this the preview would be treated as stray while the pointer is on it.
+    try {
+      return !!(el.closest(PREV_SEL) || el.closest(CARD_SEL) || el.closest('#' + LIKE_ID));
+    } catch (_) { return false; }
   }
 
   function previewsAllowed() {
@@ -375,5 +380,200 @@
 
   document.addEventListener('wheel', onWheel, { passive: false, capture: true });
   window.addEventListener('wheel',   onWheel, { passive: false, capture: true });
+
+  // ── Like button on thumbnails ────────────────────────────────────────────
+  // Likes the hovered video without opening it, by calling the same InnerTube
+  // endpoint the watch page uses (/youtubei/v1/like/like). Requests from the
+  // page need YouTube's SAPISIDHASH authorisation header — the cookies alone
+  // give "You must be signed in to perform this operation".
+  //
+  // One shared button floating on document.body, positioned over whichever
+  // card is hovered: a button injected into the card itself would be clipped
+  // by the thumbnail's overflow:hidden. It sits top-LEFT because YouTube puts
+  // its own hover controls top-right, the duration badge bottom-right, and
+  // our seek bar along the bottom edge.
+  //
+  // Whether a video is ALREADY liked is not known — YouTube does not put that
+  // in the home-page data and asking per card would be a request per
+  // thumbnail — so the button starts neutral and tracks what you like here;
+  // clicking a liked one again removes the like.
+
+  const LIKE_COLOR = '#3ea6ff';   // YouTube's own accent blue
+  const liked   = new Set();      // videoIds liked during this page session
+  let likeBtn   = null;
+  let likeCard  = null;           // card the button is currently attached to
+  let likeBusy  = false;
+
+  function loggedIn() {
+    try { return !!(window.ytcfg && ytcfg.get('LOGGED_IN')); } catch (_) { return false; }
+  }
+
+  function videoIdOf(card) {
+    try {
+      const a = card.querySelector('a#thumbnail[href], a[href*="/watch?v="]');
+      if (!a) return null;
+      return new URL(a.href, location.origin).searchParams.get('v');
+    } catch (_) { return null; }
+  }
+
+  // Authorization: SAPISIDHASH <ts>_<sha1(ts + " " + SAPISID + " " + origin)>
+  async function sapisidHash() {
+    const m = document.cookie.match(
+      /(?:^|;\s*)(?:SAPISID|__Secure-3PAPISID|__Secure-1PAPISID)=([^;]+)/);
+    if (!m || !crypto.subtle) return null;
+    const ts   = Math.floor(Date.now() / 1000);
+    const data = ts + ' ' + decodeURIComponent(m[1]) + ' ' + location.origin;
+    const buf  = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(data));
+    const hex  = Array.from(new Uint8Array(buf))
+                      .map(b => b.toString(16).padStart(2, '0')).join('');
+    return 'SAPISIDHASH ' + ts + '_' + hex;
+  }
+
+  async function sendLike(videoId, remove) {
+    const key     = ytcfg.get('INNERTUBE_API_KEY');
+    const context = ytcfg.get('INNERTUBE_CONTEXT');
+    if (!key || !context) throw new Error('no InnerTube config');
+
+    const headers = {
+      'Content-Type':   'application/json',
+      'X-Origin':       location.origin,
+      'X-Goog-AuthUser': String(ytcfg.get('SESSION_INDEX') || 0),
+    };
+    const auth = await sapisidHash();
+    if (auth) headers['Authorization'] = auth;
+    const pageId = ytcfg.get('DELEGATED_SESSION_ID');
+    if (pageId) headers['X-Goog-PageId'] = pageId;
+
+    const res = await fetch(
+      '/youtubei/v1/like/' + (remove ? 'removelike' : 'like') +
+      '?key=' + encodeURIComponent(key) + '&prettyPrint=false',
+      { method: 'POST', credentials: 'same-origin', headers,
+        body: JSON.stringify({ context, target: { videoId } }) });
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()).slice(0, 120));
+    return res;
+  }
+
+  function thumbIcon(on) {
+    // Built with DOM calls, not innerHTML: youtube.com enforces Trusted Types.
+    const NS  = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '18');
+    svg.setAttribute('height', '18');
+    svg.style.pointerEvents = 'none';
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', 'M18.77,11h-4.23l1.52-4.94C16.38,5.03,15.54,4,14.38,4c-0.58,0-1.14,0.24-1.52,0.65' +
+                           'L7,11H3v10h4h1h9.43c1.06,0,1.98-0.67,2.19-1.61l1.34-6C21.23,12.15,20.18,11,18.77,11z');
+    path.setAttribute('fill', on ? LIKE_COLOR : '#fff');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function setLikeIcon(on) {
+    if (!likeBtn) return;
+    while (likeBtn.firstChild) likeBtn.removeChild(likeBtn.firstChild);
+    likeBtn.appendChild(thumbIcon(on));
+    likeBtn.style.background = on ? 'rgba(62,166,255,0.18)' : 'rgba(0,0,0,0.65)';
+    likeBtn.style.outline    = on ? '1px solid ' + LIKE_COLOR : '1px solid rgba(255,255,255,0.25)';
+  }
+
+  function ensureLikeBtn() {
+    if (likeBtn && document.body && document.body.contains(likeBtn)) return likeBtn;
+    if (!document.body) return null;
+    likeBtn = document.createElement('div');
+    likeBtn.id = LIKE_ID;
+    likeBtn.setAttribute('role', 'button');
+    likeBtn.setAttribute('title', 'Like this video (Benn YT Tools)');
+    likeBtn.setAttribute('style',
+      'position:fixed;z-index:2147483647;display:none;align-items:center;justify-content:center;' +
+      'width:30px;height:30px;border-radius:50%;cursor:pointer;' +
+      'background:rgba(0,0,0,0.65);outline:1px solid rgba(255,255,255,0.25);' +
+      'transition:transform 0.1s,background 0.1s');
+    likeBtn.addEventListener('mouseenter', () => { likeBtn.style.transform = 'scale(1.12)'; });
+    likeBtn.addEventListener('mouseleave', () => { likeBtn.style.transform = 'none'; });
+    // Capture phase + preventDefault: never let the click reach the card link.
+    likeBtn.addEventListener('click', onLikeClick, true);
+    likeBtn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+    setLikeIcon(false);
+    document.body.appendChild(likeBtn);
+    return likeBtn;
+  }
+
+  async function onLikeClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (likeBusy || !likeCard) return;
+    const id = videoIdOf(likeCard);
+    if (!id) { flash('No video id'); return; }
+
+    const remove = liked.has(id);
+    likeBusy = true;
+    likeBtn.style.opacity = '0.5';
+    const r = likeBtn.getBoundingClientRect();
+    try {
+      await sendLike(id, remove);
+      if (remove) liked.delete(id); else liked.add(id);
+      setLikeIcon(!remove);
+      flash(remove ? 'Like removed' : 'Liked', r.left + r.width / 2, r.top - 18);
+    } catch (err) {
+      setLikeIcon(false);
+      flash('Like failed', r.left + r.width / 2, r.top - 18);
+      console.warn('[Benn YT Tools] like failed:', err);
+    }
+    likeBtn.style.opacity = '1';
+    likeBusy = false;
+  }
+
+  function positionLikeBtn(card) {
+    const btn = ensureLikeBtn();
+    if (!btn) return;
+    const thumb = card.querySelector('ytd-thumbnail, yt-thumbnail-view-model, a#thumbnail') || card;
+    const r = thumb.getBoundingClientRect();
+    if (!r.width || !r.height) { btn.style.display = 'none'; return; }
+    btn.style.top     = (r.top + 8) + 'px';
+    btn.style.left    = (r.left + 8) + 'px';
+    btn.style.display = 'flex';
+  }
+
+  function hideLikeBtn() {
+    if (likeBtn) likeBtn.style.display = 'none';
+    likeCard = null;
+  }
+
+  function cardFromEvent(e) {
+    const path = e.composedPath ? e.composedPath() : [];
+    for (const el of path) {
+      try { if (el.matches && el.matches(CARD_SEL)) return el; } catch (_) {}
+    }
+    return null;
+  }
+
+  document.addEventListener('mouseover', e => {
+    if (!loggedIn()) return;
+    const card = cardFromEvent(e);
+    if (!card) return;
+    if (card !== likeCard) {
+      likeCard = card;
+      const id = videoIdOf(card);
+      setLikeIcon(!!id && liked.has(id));
+    }
+    positionLikeBtn(card);
+  }, true);
+
+  // Keep it glued to the card while scrolling, and take it away once the
+  // pointer is neither on the card nor on the button itself.
+  setInterval(() => {
+    if (!likeCard || !likeBtn || likeBtn.style.display === 'none') return;
+    if (!likeCard.isConnected) { hideLikeBtn(); return; }
+    let over = false;
+    if (ptrX >= 0) {
+      try {
+        const el = document.elementFromPoint(ptrX, ptrY);
+        over = !!(el && el.closest &&
+                 (el.closest('#' + LIKE_ID) || (likeCard.contains(el) || el.closest(PREV_SEL))));
+      } catch (_) {}
+    }
+    if (over) positionLikeBtn(likeCard); else hideLikeBtn();
+  }, POLL_MS);
 
 })();
