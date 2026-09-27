@@ -161,28 +161,48 @@
     return !document.hidden && document.hasFocus() && pointerOverCard();
   }
 
-  function stopPreview(v, hard) {
+  // Silence is element-level only: muting through the player API would be
+  // saved by YouTube and handed to the watch page (the "starts muted" bug).
+  function mutePreview(v) {
+    try { if (!origMuted.get.call(v)) origMuted.set.call(v, true); } catch (_) {}
+  }
+
+  // Pause first and keep the frame. stopVideo() is YouTube's real teardown
+  // but it unloads the video, which leaves a black tile reading -0:01 if the
+  // preview is still on screen — so it is the last resort, not the default.
+  function stopPreview(v, attempt) {
     const mp = playerOf(v);
+    mutePreview(v);
     try {
-      if (mp && typeof mp.stopVideo === 'function')       mp.stopVideo();   // YouTube's own teardown
-      else if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+      if (attempt >= 3 && mp && typeof mp.stopVideo === 'function') mp.stopVideo();
+      else if (mp && typeof mp.pauseVideo === 'function')           mp.pauseVideo();
       else v.pause();
     } catch (_) {
       try { v.pause(); } catch (__) {}
     }
-    // Escalation, if something keeps resuming it: silence it outright.
-    if (hard) { try { origMuted.set.call(v, true); } catch (_) {} }
   }
 
   function stopAllPreviews() {
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
-      if (v instanceof HTMLMediaElement && !v.paused) stopPreview(v, true);
+      if (v instanceof HTMLMediaElement && !v.paused) stopPreview(v, 1);
     });
   }
 
+  function muteAllPreviews() {
+    document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
+      if (v instanceof HTMLMediaElement) mutePreview(v);
+    });
+  }
+
+  // A hidden tab cannot be hovered, so stopping is safe and invisible there.
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopAllPreviews(); });
-  window.addEventListener('blur',     stopAllPreviews);
   window.addEventListener('pagehide', stopAllPreviews);
+  // Losing focus only silences. The window may still be visible with the
+  // pointer resting on a thumbnail (Brave on one screen, another app focused)
+  // — YouTube legitimately shows a preview there, and tearing it down mid-play
+  // is what produced the black tile. If the pointer really has left the card,
+  // the poll below stops it anyway.
+  window.addEventListener('blur', muteAllPreviews);
 
   // ── Audio patches ─────────────────────────────────────────────────────────
   Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
@@ -192,6 +212,12 @@
         if (val) {
           if (recentClick || userHasMuted) {
             if (recentClick) userHasMuted = true;
+            origMuted.set.call(this, true);
+          } else if (!previewsAllowed()) {
+            // Window unfocused / tab hidden / pointer elsewhere: let YouTube's
+            // mute stand. Unmuting here first and letting the poll re-mute a
+            // moment later is what made unfocused hovers blurt out ~1s of
+            // sound before going quiet.
             origMuted.set.call(this, true);
           } else {
             // YouTube auto-muting → block synchronously (never oscillate)
@@ -246,16 +272,19 @@
           v.__bennMusic = isMusicVideo(v);
           if (v.__bennMusic && v.playbackRate !== 1) v.playbackRate = 1;
         }
-        // Stray playback: stop it, and never unmute it in the meantime.
+        // Not allowed to be audible → silence it at once (no grace: this is
+        // the sound the user should never hear), and stop it once it is clear
+        // the preview is genuinely stray rather than still starting up.
         if (playing && !allowed) {
+          mutePreview(v);
           if (!v.__bennStrayAt) v.__bennStrayAt = Date.now();
-          if (Date.now() - v.__bennStrayAt >= STRAY_GRACE_MS) {
+          // While the pointer is still on the card the preview is legitimate
+          // (just unfocused) — keep it silent but leave it playing, exactly
+          // as YouTube itself would.
+          if (!pointerOverCard() && Date.now() - v.__bennStrayAt >= STRAY_GRACE_MS) {
             v.__bennStops = (v.__bennStops || 0) + 1;
-            // Retry a few times only. If YouTube keeps resuming it anyway,
-            // the hard mute keeps it silent without hammering stopVideo()
-            // eight times a second for as long as the page lives.
-            if (v.__bennStops <= 5) stopPreview(v, v.__bennStops > 1);
-            else if (!origMuted.get.call(v)) origMuted.set.call(v, true);
+            // Retry a few times only; muted already, so no need to hammer.
+            if (v.__bennStops <= 5) stopPreview(v, v.__bennStops);
           }
           return;
         }
