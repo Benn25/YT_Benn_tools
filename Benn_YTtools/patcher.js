@@ -384,12 +384,9 @@
   // clicking a liked one again removes the like.
 
   const LIKE_COLOR = '#3ea6ff';   // YouTube's own accent blue
-  const liked   = new Set();      // videoIds known to be liked
-  const likeKnown = new Map();    // videoId → true/false, from YouTube
-  let   likeProbe = 0;            // debounce token for the lookup below
+  const liked   = new Set();      // videoIds liked during this page session
   let likeBtn   = null;
   let ccBtn     = null;
-  let likeLookupTimer = 0;
   let likeCard  = null;           // card the button is currently attached to
   let likeBusy  = false;
 
@@ -418,25 +415,14 @@
     return 'SAPISIDHASH ' + ts + '_' + hex;
   }
 
-  // YouTube does not say in the home-page data whether you already liked a
-  // video, so ask for it: /youtubei/v1/next carries the like button's state.
-  // One request per video, cached for the session, fired only after the
-  // pointer has settled on a card.
-  function findLikeStatus(o, depth) {
-    if (!o || depth > 12 || typeof o !== 'object') return null;
-    if (Array.isArray(o)) {
-      for (const it of o) { const r = findLikeStatus(it, depth + 1); if (r) return r; }
-      return null;
-    }
-    for (const k of Object.keys(o)) {
-      const v = o[k];
-      if (k === 'likeStatus' && typeof v === 'string') return v;
-      const r = findLikeStatus(v, depth + 1);
-      if (r) return r;
-    }
-    return null;
-  }
-
+  // NOTE: asking YouTube whether a video is already liked does not work.
+  // /youtubei/v1/next answers INDIFFERENT for videos that are demonstrably in
+  // the account's Liked list — tested against that list in the signed-in
+  // browser, with every auth variant (SAPISIDHASH / SAPISID1PHASH /
+  // SAPISID3PHASH, with and without the api key, with watch-page context);
+  // a browse of the Liked playlist came back generic too. YouTube simply
+  // does not hand personalised like state to these calls, so the button
+  // starts neutral and only reflects likes made through it in this session.
   async function innertube(path, body) {
     const key     = ytcfg.get('INNERTUBE_API_KEY');
     const context = ytcfg.get('INNERTUBE_CONTEXT');
@@ -456,26 +442,6 @@
         body: JSON.stringify(Object.assign({ context }, body)) });
     if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + (await res.text()).slice(0, 120));
     return res;
-  }
-
-  async function refreshLikeState(videoId, card) {
-    if (likeKnown.has(videoId)) {
-      if (likeCard === card) setLikeIcon(likeKnown.get(videoId));
-      return;
-    }
-    const token = ++likeProbe;
-    try {
-      const res  = await innertube('next', { videoId });
-      const data = await res.json();
-      const st   = findLikeStatus(data, 0);
-      const isLiked = st === 'LIKE';
-      likeKnown.set(videoId, isLiked);
-      if (isLiked) liked.add(videoId); else liked.delete(videoId);
-      // Only paint if this is still the hovered card and no newer probe ran.
-      if (token === likeProbe && likeCard === card) setLikeIcon(isLiked);
-    } catch (err) {
-      console.warn('[Benn YT Tools] like state lookup failed:', err);
-    }
   }
 
   async function sendLike(videoId, remove) {
@@ -556,7 +522,6 @@
     try {
       await sendLike(id, remove);
       if (remove) liked.delete(id); else liked.add(id);
-      likeKnown.set(id, !remove);
       setLikeIcon(!remove);
       flash(remove ? 'Like removed' : 'Liked', r.left + r.width / 2, r.top - 18);
     } catch (err) {
@@ -639,11 +604,6 @@
       likeCard = card;
       const id = videoIdOf(card);
       setLikeIcon(!!id && liked.has(id));
-      // Ask YouTube whether it is already liked, once the pointer settles.
-      if (id) {
-        clearTimeout(likeLookupTimer);
-        likeLookupTimer = setTimeout(() => refreshLikeState(id, card), 300);
-      }
     }
     positionLikeBtn(card);
   }, true);
