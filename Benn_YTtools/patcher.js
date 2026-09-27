@@ -73,18 +73,12 @@
     }
   });
 
-  // ── User-click detection ──────────────────────────────────────────────────
-  // Only a click on an actual mute control means "the user wants silence".
-  // Every other click on a card is the user OPENING the video: treat that as
-  // a teardown instead. Counting it as a mute (what we used to do) had two
-  // bad effects — the mute YouTube applies while navigating was recorded as
-  // the user's choice, silencing every later preview, and the preview kept
-  // playing over the watch page.
-  const MUTE_BTN_SEL = 'ytm-mute-button,yt-mute-toggle-button,' +
-                       '.ytmMuteButtonHost,.ytmMuteButtonButton,.ytp-mute-button';
-  let recentClick  = false;
-  let userHasMuted = false;
-
+  // ── Card clicks ───────────────────────────────────────────────────────────
+  // Sound on previews is unconditional now. Tracking "the user muted this"
+  // was a losing game: YouTube has removed the mute toggle from the inline
+  // preview controls, so a flag that got stuck on left every preview silent
+  // with no way to switch it back. A preview is audible whenever it is
+  // allowed to be (focused, visible, hovered) — nothing else.
   function pathHas(path, sel) {
     for (const el of path) {
       try { if (el.matches && el.matches(sel)) return true; } catch (_) {}
@@ -95,13 +89,8 @@
   document.addEventListener('click', e => {
     const path = e.composedPath ? e.composedPath() : [];
     if (!pathHas(path, CARD_SEL + ',' + PREV_SEL)) return;
-    if (pathHas(path, MUTE_BTN_SEL)) {
-      recentClick = true;
-      setTimeout(() => { recentClick = false; }, 250);
-    } else {
-      // Opening the video — no preview may outlive the click.
-      setTimeout(stopAllPreviews, 0);
-    }
+    // Opening the video — no preview may outlive the click.
+    setTimeout(stopAllPreviews, 0);
   }, true);
 
   // ── Player-state sync (guarded, loop-proof) ──────────────────────────────
@@ -215,10 +204,7 @@
     set(val) {
       if (inPrev(this)) {
         if (val) {
-          if (recentClick || userHasMuted) {
-            if (recentClick) userHasMuted = true;
-            origMuted.set.call(this, true);
-          } else if (!previewsAllowed()) {
+          if (!previewsAllowed()) {
             // Window unfocused / tab hidden / pointer elsewhere: let YouTube's
             // mute stand. Unmuting here first and letting the poll re-mute a
             // moment later is what made unfocused hovers blurt out ~1s of
@@ -229,11 +215,10 @@
             const vid = this;
             origMuted.set.call(vid, false);
             if (origVolume.get.call(vid) < 0.01) origVolume.set.call(vid, DEFAULT_VOLUME);
-            // Sync the mute button after YouTube's handler chain completes
+            // Put YouTube's own player state back in sync afterwards
             setTimeout(() => syncMuteButton(vid), 0);
           }
         } else {
-          userHasMuted = false;
           origMuted.set.call(this, false);
         }
         return;
@@ -245,17 +230,13 @@
   Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
     get() { return origVolume.get.call(this); },
     set(val) {
-      if (val < 0.01 && inPrev(this)) {
-        if (!recentClick && !userHasMuted) return;
-      }
+      if (val < 0.01 && inPrev(this) && previewsAllowed()) return;
       origVolume.set.call(this, val);
     }, configurable: true,
   });
 
   Element.prototype.setAttribute = function (n, v) {
-    if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this)) {
-      if (!recentClick && !userHasMuted) return;
-    }
+    if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this) && previewsAllowed()) return;
     return origSetAttr.call(this, n, v);
   };
 
@@ -295,7 +276,6 @@
         }
         v.__bennStrayAt = 0;
         if (playing) v.__bennStops = 0;
-        if (userHasMuted) return;
         let flipped = false;
         if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
         if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);
@@ -477,8 +457,22 @@
     likeBtn.style.outline    = on ? '1px solid ' + LIKE_COLOR : '1px solid rgba(255,255,255,0.25)';
   }
 
+  // Moving the pointer onto the button used to end the preview: the button
+  // sat on document.body, so leaving the thumbnail for it fired mouseout /
+  // mouseleave on the card and YouTube ran its teardown. Two defences —
+  // mount the button INSIDE the hovered thumbnail (measured: the thumbnail
+  // chain is overflow:visible, so nothing is clipped, and z-index keeps it on
+  // top), and swallow the leave events whose relatedTarget is the button, for
+  // the layouts where YouTube listens on an inner element.
+  for (const type of ['mouseout', 'mouseleave', 'pointerout', 'pointerleave']) {
+    document.addEventListener(type, e => {
+      const to = e.relatedTarget;
+      if (to && to.closest && to.closest('#' + LIKE_ID)) e.stopPropagation();
+    }, true);
+  }
+
   function ensureLikeBtn() {
-    if (likeBtn && document.body && document.body.contains(likeBtn)) return likeBtn;
+    if (likeBtn) return likeBtn;
     if (!document.body) return null;
     likeBtn = document.createElement('div');
     likeBtn.id = LIKE_ID;
@@ -530,9 +524,28 @@
     const thumb = card.querySelector('ytd-thumbnail, yt-thumbnail-view-model, a#thumbnail') || card;
     const r = thumb.getBoundingClientRect();
     if (!r.width || !r.height) { btn.style.display = 'none'; return; }
-    btn.style.top     = (r.top + 8) + 'px';
-    btn.style.left    = (r.left + 8) + 'px';
-    btn.style.display = 'flex';
+
+    // Host it in the thumbnail (so the pointer never leaves the card as far
+    // as YouTube is concerned), positioned relative to that host.
+    const host = thumb;
+    if (btn.parentElement !== host) host.appendChild(btn);
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    const hr = host.getBoundingClientRect();
+    btn.style.position = 'absolute';
+    btn.style.top      = (r.top - hr.top + 8) + 'px';
+    btn.style.left     = (r.left - hr.left + 8) + 'px';
+    btn.style.display  = 'flex';
+
+    // If a layout does clip it after all, fall back to floating on the body.
+    const br = btn.getBoundingClientRect();
+    let top = null;
+    try { top = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2); } catch (_) {}
+    if (top && !btn.contains(top) && top !== btn) {
+      document.body.appendChild(btn);
+      btn.style.position = 'fixed';
+      btn.style.top      = (r.top + 8) + 'px';
+      btn.style.left     = (r.left + 8) + 'px';
+    }
   }
 
   function hideLikeBtn() {
