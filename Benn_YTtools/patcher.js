@@ -33,6 +33,13 @@
   const LIKE_ID  = '__byt_like__';
   const CC_ID    = '__byt_cc__';
   const CTL_SEL  = '#' + LIKE_ID + ',#' + CC_ID;   // our own overlay controls
+  // Player controls that live inside a preview: YouTube's (new and classic)
+  // and our own fallback seek bar. Clicking these is operating the preview,
+  // never opening the video.
+  const PLAYER_CTL_SEL = '#__byt_pbar__,#player-controls,yt-inline-player-controls,' +
+                         'yt-progress-bar,.ytPlayerProgressBarHost,.ytProgressBarLineHost,' +
+                         '.ytPlayerProgressBarDragContainer,.ytp-progress-bar,' +
+                         '.ytp-progress-bar-container,.ytp-chrome-bottom';
 
   const inPrev = el => el.isConnected && !!el.closest(PREV_SEL);
 
@@ -93,8 +100,10 @@
   document.addEventListener('click', e => {
     const path = e.composedPath ? e.composedPath() : [];
     // Our own buttons live inside the thumbnail, so they are "in a card" too —
-    // clicking them must not be mistaken for opening the video.
-    if (pathHas(path, CTL_SEL)) return;
+    // clicking them must not be mistaken for opening the video. Same for the
+    // preview's progress bar: clicking it used to seek and then immediately
+    // stop the preview, so it only resumed after un-hovering and hovering again.
+    if (pathHas(path, CTL_SEL) || pathHas(path, PLAYER_CTL_SEL)) return;
     if (!pathHas(path, CARD_SEL + ',' + PREV_SEL)) return;
     // Opening the video — no preview may outlive the click.
     setTimeout(stopAllPreviews, 0);
