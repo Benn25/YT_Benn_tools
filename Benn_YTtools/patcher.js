@@ -29,7 +29,13 @@
   const origSetAttr = Element.prototype.setAttribute;
 
   const PREV_SEL = 'ytd-video-preview,ytd-moving-thumbnail-renderer,yt-video-attribute-view-model,#video-preview';
-  const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,ytd-grid-video-renderer';
+  // yt-lockup-view-model is YouTube's newer card element (playlists already
+  // use it, other surfaces are migrating). Without it those cards are not
+  // recognised as cards at all: the pointer looks like it is nowhere near a
+  // thumbnail, so the guard treats a perfectly good preview as stray and
+  // stops it a moment after it starts — and no like/CC buttons appear.
+  const CARD_SEL = 'ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-video-renderer,' +
+                   'ytd-grid-video-renderer,yt-lockup-view-model';
   const LIKE_ID  = '__byt_like__';
   const CC_ID    = '__byt_cc__';
   const CTL_SEL  = '#' + LIKE_ID + ',#' + CC_ID;   // our own overlay controls
@@ -186,6 +192,10 @@
   // Pause first and keep the frame. stopVideo() is YouTube's real teardown
   // but it unloads the video, which leaves a black tile reading -0:01 if the
   // preview is still on screen — so it is the last resort, not the default.
+  function isPlaying(v) {
+    try { return !v.paused && !v.ended; } catch (_) { return false; }
+  }
+
   function stopPreview(v, attempt) {
     const mp = playerOf(v);
     mutePreview(v);
@@ -218,11 +228,15 @@
     set(val) {
       if (inPrev(this)) {
         if (val) {
-          if (!previewsAllowed()) {
-            // Window unfocused / tab hidden / pointer elsewhere: let YouTube's
-            // mute stand. Unmuting here first and letting the poll re-mute a
-            // moment later is what made unfocused hovers blurt out ~1s of
-            // sound before going quiet.
+          if (!previewsAllowed() || !isPlaying(this)) {
+            // Two reasons to let YouTube's mute stand:
+            //  • not allowed (unfocused / hidden / pointer elsewhere) —
+            //    unmuting here and re-muting a moment later is what made
+            //    unfocused hovers blurt out ~1s of sound; and
+            //  • not playing yet — Chrome only permits autoplay while muted,
+            //    so unmuting before the preview rolls gets its play() call
+            //    rejected and the preview never starts at all. It is unmuted
+            //    by the poll below the moment it is actually playing.
             origMuted.set.call(this, true);
           } else {
             // YouTube auto-muting → block synchronously (never oscillate)
@@ -250,7 +264,8 @@
   });
 
   Element.prototype.setAttribute = function (n, v) {
-    if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this) && previewsAllowed()) return;
+    if (n === 'muted' && this instanceof HTMLVideoElement && inPrev(this) &&
+        previewsAllowed() && isPlaying(this)) return;
     return origSetAttr.call(this, n, v);
   };
 
@@ -260,6 +275,7 @@
   // native getter throws "Illegal invocation"), and one bad element must
   // not abort the whole poll or flood the extension's error log.
   let pollWarned = false;
+  let kickWarned = false;
   setInterval(() => {
     const allowed = previewsAllowed();
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
@@ -289,7 +305,39 @@
           return;
         }
         v.__bennStrayAt = 0;
-        if (playing) { v.__bennStops = 0; enforceCaptions(v); }
+
+        if (!playing) {
+          // Loaded, hovered, but sitting at the very start: its play() was
+          // refused — Chrome blocks autoplay unless the video is muted, and
+          // something (YouTube, or us in an earlier version) unmuted it first.
+          // Mute it, start it again, and let the unmute below happen once it
+          // is actually rolling.
+          if (allowed && v.readyState >= 2 && v.currentTime < 0.2) {
+            if (!v.__bennKickAt) v.__bennKickAt = Date.now();
+            else if (Date.now() - v.__bennKickAt >= 800 && (v.__bennKicks || 0) < 3) {
+              v.__bennKicks = (v.__bennKicks || 0) + 1;
+              try { origMuted.set.call(v, true); } catch (_) {}
+              const mp = playerOf(v);
+              try {
+                if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+                else { const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }
+              } catch (_) {}
+              if (!kickWarned) {
+                kickWarned = true;
+                console.warn('[Benn YT Tools] preview would not start; restarting it muted ' +
+                             '(browser autoplay policy). It is unmuted once playing.');
+              }
+            }
+          } else {
+            v.__bennKickAt = 0;
+          }
+          return;
+        }
+
+        v.__bennStops = 0;
+        v.__bennKickAt = 0;
+        v.__bennKicks  = 0;
+        enforceCaptions(v);
         let flipped = false;
         if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }
         if (origVolume.get.call(v) < 0.01) origVolume.set.call(v, DEFAULT_VOLUME);

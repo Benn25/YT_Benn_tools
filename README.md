@@ -111,6 +111,9 @@ These cost real debugging time — check them before assuming a bug is ours.
 - Forcing `element.muted = false` leaves the player object still believing it
   is muted (`isMuted() === true` while audio plays), and that stale state
   follows you to the watch page. Call the player's `unMute()` to resync.
+- **Unmuting before playback starts can stop the preview from starting at
+  all** — browsers only allow autoplay while muted. Previews must be left
+  muted until they are actually rolling, then unmuted.
 - youtube.com enforces **Trusted Types**: build injected icons with
   `createElementNS`, never `innerHTML`.
 - **InnerTube from the page: writes work, reads are not personalised.**
@@ -125,8 +128,5 @@ These cost real debugging time — check them before assuming a bug is ours.
 
 - **The thumbs-up cannot show whether you already liked a video** (see above);
   it starts neutral and reflects only likes made through it in that session.
-- **Cards rendered as `yt-lockup-view-model` get no buttons** — the Liked
-  videos playlist uses them, and YouTube is migrating more surfaces to them.
-  Adding it to `CARD_SEL` in `patcher.js` is the fix when that matters.
 - Captions only appear where the video actually has them (auto-generated
   count).
