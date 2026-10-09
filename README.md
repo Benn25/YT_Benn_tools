@@ -29,9 +29,12 @@ Extension lives in [`Benn_YTtools/`](Benn_YTtools). Requires Chrome/Brave 111+
   time tooltip. Used only when YouTube does not render its own bar — since
   Sept 2026 it builds the inline player with `controlsType = 0`, so usually it
   does not
-- **SponsorBlock segments** appear on that bar, including the highlight marker.
-  SponsorBlock 6.x attaches its overlay to `#video-preview .ytp-progress-bar`,
-  so the fallback bar carries that class on purpose
+- **SponsorBlock works on previews** — segments on the bar, the highlight
+  marker, and autoskip. SponsorBlock 6.x attaches its overlay to
+  `#video-preview .ytp-progress-bar`, so the fallback bar carries that class
+  on purpose. When YouTube renders its own preview bar, SponsorBlock uses that
+  instead — see "SponsorBlock vs YouTube's preview watcher" below for why that
+  needed help
 - **CC button** — toggles captions on previews. Global, remembered across
   previews and browser restarts. YouTube removed its own CC toggle from the
   inline preview controls in Sept 2026
@@ -117,6 +120,20 @@ These cost real debugging time — check them before assuming a bug is ours.
 - Do not start a preview yourself either. Calling `playVideo()` during
   YouTube's startup window plays the audio while the preview surface is
   still hidden: sound over a frozen thumbnail.
+- **SponsorBlock vs YouTube's preview watcher (Oct 2026).** While a preview
+  plays, YouTube watches the page with a `MutationObserver`
+  (`childList`, `subtree`) and *deactivates* the preview on certain DOM
+  changes (`MutationObserver → deactivate → stopPlayer → cancelPlayback`).
+  SponsorBlock adding its segment bar to the preview's progress bar and its
+  label to the seek tooltip tripped it 3–4 ms later, so every preview died
+  the moment it started; turning SponsorBlock off fixed it. `patcher.js` now
+  wraps `MutationObserver` before YouTube's scripts load and drops records
+  that only concern SponsorBlock's elements (or ours) before YouTube's
+  callbacks see them. SponsorBlock runs in its own isolated world with its own
+  observers, so it is unaffected — segments and autoskip keep working.
+- Testing previews in a **background tab** is meaningless: Chrome defers media
+  loading in tabs that are not visible (`readyState` stays 0), and this
+  extension stops previews in hidden tabs anyway.
 - youtube.com enforces **Trusted Types**: build injected icons with
   `createElementNS`, never `innerHTML`.
 - **InnerTube from the page: writes work, reads are not personalised.**

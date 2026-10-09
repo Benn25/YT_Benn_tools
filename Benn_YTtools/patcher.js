@@ -15,6 +15,92 @@
  */
 (function () {
 
+  // ── Hide SponsorBlock's (and our) DOM edits from YouTube ──────────────────
+  // Must run first, before any YouTube script creates an observer.
+  //
+  // While a hover preview plays, YouTube watches the page with a
+  // MutationObserver ({childList, subtree}) and DEACTIVATES the preview when
+  // it sees certain DOM changes. Traced live (Oct 2026): the cancel came from
+  // MutationObserver → deactivate → stopPlayer → cancelPlayback, 3–4 ms after
+  // SponsorBlock added its segment bar (#previewbar) to the preview's progress
+  // bar and its category label to the seek tooltip. With SponsorBlock on,
+  // hover previews died the instant they started; with it off they played.
+  //
+  // So MutationObserver is wrapped: records that only concern SponsorBlock's
+  // elements or this extension's own are dropped before YouTube's callbacks
+  // see them, and a callback left with nothing is not called at all.
+  // SponsorBlock itself is untouched — it runs in its own isolated world with
+  // its own MutationObserver — so its segments, tooltip and autoskip keep
+  // working, on previews as on the watch page. Mixed records (foreign and
+  // YouTube nodes together) are passed through unchanged.
+  (function hideForeignMutations() {
+    const NativeMO = window.MutationObserver;
+    if (!NativeMO) return;
+
+    const OWN_IDS = { __byt_like__: 1, __byt_cc__: 1, __byt_pbar__: 1, previewbar: 1 };
+    // SponsorBlock's ids/classes (sponsorCategoryTooltip, sponsorSkipNotice,
+    // sponsorBlockCategoryPill, sbNotInvidious, …). YouTube's own channel
+    // "sponsor-button" and anything Polymer-rendered (style-scope) is excluded.
+    const SB_RE = /sponsor(?!-button)|sbNotInvidious|sbhidden/i;
+
+    function isForeignEl(el) {
+      for (let i = 0; el && i < 6; i++, el = el.parentElement) {
+        if (el.nodeType !== 1) continue;
+        const id = el.id || '';
+        if (OWN_IDS[id]) return true;
+        const tag = el.tagName;
+        if (tag.startsWith('YTD-') || tag.startsWith('YT-')) continue;
+        const cls = typeof el.className === 'string' ? el.className : '';
+        if (cls.indexOf('style-scope') !== -1) continue;
+        if (/(^|\s)previewbar(\s|$)/.test(cls) || SB_RE.test(cls) || SB_RE.test(id)) return true;
+      }
+      return false;
+    }
+
+    function isForeignNode(n) {
+      if (n.nodeType === 1) return isForeignEl(n);
+      return n.parentElement ? isForeignEl(n.parentElement) : false;
+    }
+
+    function isForeignRecord(r) {
+      const t = r.target && (r.target.nodeType === 1 ? r.target : r.target.parentElement);
+      if (t && isForeignEl(t)) return true;
+      if (r.type !== 'childList') return false;
+      const added = r.addedNodes, removed = r.removedNodes;
+      if (!added.length && !removed.length) return false;
+      for (const n of added)   if (!isForeignNode(n)) return false;
+      for (const n of removed) if (!isForeignNode(n)) return false;
+      return true;
+    }
+
+    function filterRecords(records) {
+      for (let i = 0; i < records.length; i++) {
+        if (isForeignRecord(records[i])) return records.filter(r => !isForeignRecord(r));
+      }
+      return records;
+    }
+
+    function FilteringMutationObserver(callback) {
+      const wrapped = function (records, observer) {
+        const keep = filterRecords(records);
+        if (keep.length) return callback.call(this, keep, observer);
+      };
+      return Reflect.construct(NativeMO, [wrapped], new.target || FilteringMutationObserver);
+    }
+    FilteringMutationObserver.prototype = NativeMO.prototype;
+    Object.setPrototypeOf(FilteringMutationObserver, NativeMO);
+
+    const nativeTake = NativeMO.prototype.takeRecords;
+    NativeMO.prototype.takeRecords = function () {
+      return filterRecords(nativeTake.call(this));
+    };
+
+    window.MutationObserver = FilteringMutationObserver;
+    if (window.WebKitMutationObserver === NativeMO) {
+      window.WebKitMutationObserver = FilteringMutationObserver;
+    }
+  })();
+
   const DEFAULT_VOLUME  = 0.4;
   const POLL_MS         = 120;
 
