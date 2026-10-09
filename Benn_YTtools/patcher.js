@@ -275,7 +275,6 @@
   // native getter throws "Illegal invocation"), and one bad element must
   // not abort the whole poll or flood the extension's error log.
   let pollWarned = false;
-  let kickWarned = false;
   setInterval(() => {
     const allowed = previewsAllowed();
     document.querySelectorAll(PREV_SEL + ' video').forEach(v => {
@@ -307,36 +306,16 @@
         v.__bennStrayAt = 0;
 
         if (!playing) {
-          // Loaded, hovered, but sitting at the very start: its play() was
-          // refused — Chrome blocks autoplay unless the video is muted, and
-          // something (YouTube, or us in an earlier version) unmuted it first.
-          // Mute it, start it again, and let the unmute below happen once it
-          // is actually rolling.
-          if (allowed && v.readyState >= 2 && v.currentTime < 0.2) {
-            if (!v.__bennKickAt) v.__bennKickAt = Date.now();
-            else if (Date.now() - v.__bennKickAt >= 800 && (v.__bennKicks || 0) < 3) {
-              v.__bennKicks = (v.__bennKicks || 0) + 1;
-              try { origMuted.set.call(v, true); } catch (_) {}
-              const mp = playerOf(v);
-              try {
-                if (mp && typeof mp.playVideo === 'function') mp.playVideo();
-                else { const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }
-              } catch (_) {}
-              if (!kickWarned) {
-                kickWarned = true;
-                console.warn('[Benn YT Tools] preview would not start; restarting it muted ' +
-                             '(browser autoplay policy). It is unmuted once playing.');
-              }
-            }
-          } else {
-            v.__bennKickAt = 0;
-          }
+          // Nothing to do for a preview that is not rolling yet — in
+          // particular, do not unmute it: browsers only allow autoplay while
+          // muted, so unmuting here gets YouTube's play() rejected and the
+          // preview never starts. Nor start it ourselves: doing that preempts
+          // YouTube's own startup, which plays the audio while the preview
+          // surface is still hidden — sound over a frozen thumbnail.
           return;
         }
 
         v.__bennStops = 0;
-        v.__bennKickAt = 0;
-        v.__bennKicks  = 0;
         enforceCaptions(v);
         let flipped = false;
         if (origMuted.get.call(v)) { origMuted.set.call(v, false); flipped = true; }

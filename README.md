@@ -114,6 +114,9 @@ These cost real debugging time — check them before assuming a bug is ours.
 - **Unmuting before playback starts can stop the preview from starting at
   all** — browsers only allow autoplay while muted. Previews must be left
   muted until they are actually rolling, then unmuted.
+- Do not start a preview yourself either. Calling `playVideo()` during
+  YouTube's startup window plays the audio while the preview surface is
+  still hidden: sound over a frozen thumbnail.
 - youtube.com enforces **Trusted Types**: build injected icons with
   `createElementNS`, never `innerHTML`.
 - **InnerTube from the page: writes work, reads are not personalised.**
