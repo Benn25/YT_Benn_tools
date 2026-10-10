@@ -488,6 +488,106 @@
   document.addEventListener('wheel', onWheel, { passive: false, capture: true });
   window.addEventListener('wheel',   onWheel, { passive: false, capture: true });
 
+  // The preview's player element. (content.js has its own copy; the two
+  // scripts run in different worlds and cannot share functions.)
+  function previewPlayer() {
+    return document.getElementById('inline-preview-player') ||
+           document.querySelector('ytd-video-preview .html5-video-player, #video-preview .html5-video-player');
+  }
+
+  // ── Keyboard on hover previews ───────────────────────────────────────────
+  //   Ctrl (left or right), pressed and released on its own → pause / resume
+  //   , / .  while paused → one frame back / forward (as on the watch page)
+  // Only the preview under the pointer is affected. Ctrl counts only when no
+  // other key, click or wheel happened while it was held, so Ctrl+C, Ctrl+F,
+  // Ctrl+click and Ctrl+wheel zoom behave exactly as before. Nothing happens
+  // while typing in a text field.
+  function isTyping() {
+    const a = document.activeElement;
+    if (!a) return false;
+    if (a.isContentEditable) return true;
+    const tag = a.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+
+  function hoveredPreviewVideo() {
+    if (!pointerOverCard()) return null;
+    const mp = previewPlayer();
+    const v = mp && mp.querySelector('video');
+    return v && v.duration > 0 ? v : null;
+  }
+
+  // Frame length from the stream actually playing ("640x360@30 / …" in the
+  // player's stats), so 24/25/30/60 fps videos all step one real frame.
+  function previewFps(v) {
+    const mp = playerOf(v);
+    try {
+      const st = mp && mp.getStatsForNerds && mp.getStatsForNerds();
+      const m  = st && String(st.resolution || '').match(/@(\d+(?:\.\d+)?)/);
+      if (m) { const f = parseFloat(m[1]); if (f >= 10 && f <= 120) return f; }
+    } catch (_) {}
+    return 30;
+  }
+
+  function videoCentre(v) {
+    const r = v.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  }
+
+  function togglePreviewPause(v) {
+    const mp = playerOf(v);
+    const [x, y] = videoCentre(v);
+    try {
+      if (v.paused) {
+        if (mp && typeof mp.playVideo === 'function') mp.playVideo();
+        else { const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }
+        flash('\u25B6', x, y);
+      } else {
+        if (mp && typeof mp.pauseVideo === 'function') mp.pauseVideo();
+        else v.pause();
+        flash('\u275A\u275A', x, y);
+      }
+    } catch (_) {}
+  }
+
+  function stepPreviewFrame(v, dir) {
+    const fps = previewFps(v);
+    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + dir / fps));
+    const [x, y] = videoCentre(v);
+    flash((dir > 0 ? '+1' : '\u22121') + ' frame', x, y);
+  }
+
+  let ctrlHeld = false, ctrlAlone = false;
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Control') {
+      if (!e.repeat) { ctrlHeld = true; ctrlAlone = true; }
+      return;
+    }
+    if (ctrlHeld) ctrlAlone = false;
+    if ((e.key === ',' || e.key === '.') && !e.ctrlKey && !e.altKey && !e.metaKey && !isTyping()) {
+      const v = hoveredPreviewVideo();
+      if (!v || !v.paused) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      stepPreviewFrame(v, e.key === '.' ? 1 : -1);
+    }
+  }, true);
+
+  window.addEventListener('keyup', e => {
+    if (e.key !== 'Control') return;
+    const alone = ctrlAlone;
+    ctrlHeld = ctrlAlone = false;
+    if (!alone || isTyping()) return;
+    const v = hoveredPreviewVideo();
+    if (v) togglePreviewPause(v);
+  }, true);
+
+  for (const t of ['mousedown', 'pointerdown', 'wheel']) {
+    window.addEventListener(t, () => { if (ctrlHeld) ctrlAlone = false; }, { capture: true, passive: true });
+  }
+  window.addEventListener('blur', () => { ctrlHeld = ctrlAlone = false; });
+
   // ── Like button on thumbnails ────────────────────────────────────────────
   // Likes the hovered video without opening it, by calling the same InnerTube
   // endpoint the watch page uses (/youtubei/v1/like/like). Requests from the

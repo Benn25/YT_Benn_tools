@@ -61,8 +61,13 @@ silently for YouTube, audibly for us.
 | --- | --- |
 | `Shift` + wheel | Playback speed ± step (saved as the new preview default) |
 | `Shift`+`Alt` + wheel | Scrub ± step seconds |
+| `Ctrl` (left or right, on its own) | Pause / resume |
+| `,` / `.` (while paused) | One frame back / forward |
 
-Both act on the preview under the cursor.
+All act on the preview under the cursor. `Ctrl` only counts when pressed and
+released with nothing else in between, so `Ctrl`+C, `Ctrl`+click and
+`Ctrl`+wheel zoom are unaffected; keys are ignored while typing in a field.
+The frame step uses the frame rate of the stream actually playing.
 
 ## Settings (toolbar popup)
 
