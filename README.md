@@ -94,6 +94,10 @@ only `content.js` touches `chrome.storage`.
 
 ## YouTube behaviour worth knowing (verified, dated)
 
+The full chronological record — every problem, its cause, the fix, YouTube's
+changes and the conflicts with SponsorBlock / Enhancer for YouTube — is in
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md). Summary of the traps:
+
 These cost real debugging time — check them before assuming a bug is ours.
 
 - **2026-09-21** — YouTube rebuilt the inline hover-preview player with
