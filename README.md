@@ -37,7 +37,8 @@ Extension lives in [`Benn_YTtools/`](Benn_YTtools). Requires Chrome/Brave 111+
   needed help
 - **CC button** — toggles captions on previews. Global, remembered across
   previews and browser restarts. YouTube removed its own CC toggle from the
-  inline preview controls in Sept 2026
+  inline preview controls in Sept 2026 and brought it back by Nov 2026; both
+  buttons now set the same global choice
 - **Thumbs-up button** — likes the video without opening it, via the same
   InnerTube endpoint the watch page uses. Click again to remove the like
 - **Preview speed** defaults to 1.5× (configurable); music previews are
@@ -105,6 +106,9 @@ These cost real debugging time — check them before assuming a bug is ours.
   replacement is `yt-inline-player-controls` / `yt-progress-bar` inside
   `ytd-video-preview #player-controls`, hidden by `[hide-player-controls]`.
   Whether it renders at all varies by account.
+- **2026-11** — YouTube's mute and CC buttons are back on previews (client
+  2.20261030). Anything enforcing a preview state must follow them, or their
+  clicks get undone (see TROUBLESHOOTING.md, v1.6.1).
 - **2026-09-27** — that controls container renders with **no mute and no CC
   button** any more (both existed on 2026-09-22). The player API is untouched:
   `loadModule('captions')`, `toggleSubtitles()`, `isSubtitlesOn()` and

@@ -109,6 +109,7 @@
   let speedStep    = 0.2;
   let previewSpeed = 1.5;
   let captionsOn   = false;   // remembered choice for the CC button below
+  let captionsSetAt = 0;      // when the user last changed it (see the bridge)
 
   const origMuted   = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
   const origVolume  = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
@@ -125,6 +126,8 @@
   const LIKE_ID  = '__byt_like__';
   const CC_ID    = '__byt_cc__';
   const CTL_SEL  = '#' + LIKE_ID + ',#' + CC_ID;   // our own overlay controls
+  // YouTube's own CC toggle on a preview (only exists inside previews).
+  const NATIVE_CC_SEL = 'yt-closed-captions-toggle-button,ytm-closed-captioning-button';
   // Player controls that live inside a preview: YouTube's (new and classic)
   // and our own fallback seek bar. Clicking these is operating the preview,
   // never opening the video.
@@ -172,7 +175,9 @@
       if (typeof s  === 'number' && s  >= 1    && s  <= 15)  scrubStep    = s;
       if (typeof sp === 'number' && sp >= 0.05 && sp <= 0.5) speedStep    = sp;
       if (typeof ps === 'number' && ps >= 0.5  && ps <= 3)   previewSpeed = ps;
-      if (typeof cc === 'boolean')                           captionsOn   = cc;
+      // content.js re-sends the stored settings every 100 ms; one that was read
+      // just before a click must not undo that click.
+      if (typeof cc === 'boolean' && Date.now() - captionsSetAt > 1000) captionsOn = cc;
     }
   });
 
@@ -195,6 +200,14 @@
     // clicking them must not be mistaken for opening the video. Same for the
     // preview's progress bar: clicking it used to seek and then immediately
     // stop the preview, so it only resumed after un-hovering and hovering again.
+    // YouTube's CC button (back on previews as of Nov 2026) is the same global
+    // choice as ours. Without this, enforceCaptions() put captions straight
+    // back on 85 ms after the click, so the button looked dead. Runs in the
+    // capture phase, so the player still reports the state before the toggle.
+    if (pathHas(path, NATIVE_CC_SEL) && pathHas(path, PREV_SEL)) {
+      setCaptionsChoice(!captionsAreOn(previewPlayer()));
+      return;
+    }
     if (pathHas(path, CTL_SEL) || pathHas(path, PLAYER_CTL_SEL)) return;
     if (!pathHas(path, CARD_SEL + ',' + PREV_SEL)) return;
     // Opening the video — no preview may outlive the click.
@@ -895,11 +908,17 @@
     ccBtn.style.outline    = '1px solid ' + (on ? LIKE_COLOR : 'rgba(255,255,255,0.25)');
   }
 
+  function setCaptionsChoice(on) {
+    captionsOn    = on;
+    captionsSetAt = Date.now();
+    setCcIcon(on);
+    window.postMessage({ type: '__benn_yt_save__', captionsOn: on }, '*');
+  }
+
   function onCcClick(e) {
     e.preventDefault();
     e.stopPropagation();
-    captionsOn = !captionsOn;
-    setCcIcon(captionsOn);
+    setCaptionsChoice(!captionsOn);
     // Apply to every preview player present, not just the active one, so a
     // second preview cannot come back with the old setting.
     document.querySelectorAll(PREV_SEL + ' .html5-video-player').forEach(mp => {
@@ -908,7 +927,6 @@
     });
     // Captions can take a moment to attach after the module loads.
     setTimeout(() => applyCaptions(previewPlayer(), captionsOn), 600);
-    window.postMessage({ type: '__benn_yt_save__', captionsOn }, '*');
     const r = ccBtn.getBoundingClientRect();
     flash(captionsOn ? 'Captions on' : 'Captions off', r.left + r.width / 2, r.top - 18);
   }

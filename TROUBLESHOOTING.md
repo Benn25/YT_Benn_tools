@@ -20,6 +20,7 @@ underneath us or two extensions disagreeing, not our code.
 
 | When | What YouTube changed | Effect on us | Handled in |
 | --- | --- | --- | --- |
+| by 2026-11-06 (client 2.20261030) | **Mute and CC buttons are back** on hover previews (top-right, in `yt-inline-player-controls`) | Our caption enforcement undid clicks on YouTube's CC button; our forced sound does the same to its Mute button (left as is: preview sound is always on by choice) | v1.6.1 |
 | ~2026-10-08 | Started rendering its own progress bar (`yt-progress-bar` in `#player-controls`) inside hover previews again, and shows those controls itself while a preview plays (`hide-player-controls` is removed during playback) | Gave SponsorBlock a YouTube-owned element to inject into → see the watcher conflict below. Also made the preview bar clickable YouTube UI, which our click rule mistook for "opening the video" | v1.4.2, v1.5.0 |
 | ~2026-10 (present by 10-09) | While a preview plays, the preview loader watches the page with a `MutationObserver` (`childList`, `subtree`) and **deactivates** the preview on DOM changes (`deactivate → stopPlayer → cancelPlayback`) | Any extension that edits the DOM near a playing preview can kill it | v1.5.0 |
 | ~2026-10 | Newer card element `yt-lockup-view-model` (Liked videos playlist and other surfaces) | Not recognised as a card → previews on it treated as stray, no buttons | v1.4.3 |
@@ -95,6 +96,21 @@ alongside this extension.
 ---
 
 ## Problems and fixes
+
+### v1.6.1 — impossible to turn captions off on a preview
+- **Symptom:** the user could not switch captions off, but it worked when
+  Claude tested it. The two were clicking **different buttons**: YouTube had
+  put its own CC button back at top-right, next to ours at top-left.
+- **Cause (timeline with hooks on the player API):** click on YouTube's button
+  → captions off at +34 ms → `toggleSubtitlesOn` from our `enforceCaptions` at
+  +85 ms. Our loop keeps previews on the choice stored for *our* button and
+  knew nothing about YouTube's. Self-inflicted, exposed by a YouTube change.
+- **Fix:** a click on YouTube's CC button sets the same global choice as ours.
+  Also, the 100 ms settings re-send from `content.js` is ignored for 1 s after
+  a change, so a stale value cannot overwrite a fresh click.
+- **Lesson:** a loop that enforces a state must treat every control for that
+  state as input. When "it works for me but not for the user", check they are
+  clicking the same thing: a screenshot showed the second button.
 
 ### v1.6.0 — feature: Ctrl pause and frame step on previews
 Lone Ctrl (no other key/click/wheel while held) toggles pause through the
