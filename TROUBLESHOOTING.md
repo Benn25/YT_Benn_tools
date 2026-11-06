@@ -108,9 +108,20 @@ alongside this extension.
 - **Fix:** a click on YouTube's CC button sets the same global choice as ours.
   Also, the 100 ms settings re-send from `content.js` is ignored for 1 s after
   a change, so a stale value cannot overwrite a fresh click.
+- **Follow-up:** the first report after the fix still said "comes back on right
+  after I click", which is exactly the v1.6.0 behaviour. In a freshly loaded
+  tab with a recorder running, all 3 of the user's real clicks on YouTube's
+  button held on 2 videos. Most likely that first test ran in a tab opened
+  before the reload (not proven; the first test was not recorded).
+- **Also seen in that log:** with captions off, YouTube turned them back on by
+  itself about 1 s into a new preview (its own subtitles preference), and
+  `enforceCaptions` switched them off 66 ms later. So the enforcement loop is
+  still needed; expect at most a very brief flicker.
 - **Lesson:** a loop that enforces a state must treat every control for that
   state as input. When "it works for me but not for the user", check they are
-  clicking the same thing: a screenshot showed the second button.
+  clicking the same thing: a screenshot showed the second button. And after
+  ⟳ on the extension, **refresh open YouTube tabs**: they keep running the old
+  page script until then.
 
 ### v1.6.0 — feature: Ctrl pause and frame step on previews
 Lone Ctrl (no other key/click/wheel while held) toggles pause through the
@@ -236,6 +247,10 @@ Files on disk were named `.jsc` while the manifest asked for `.js`. Renamed.
 - **Find what YouTube reacted to:** a `MutationObserver` on `document.body`
   logging records, plus a marker in the pause hook, shows the last DOM change
   before a cancel.
+- **Record the user's own clicks** when it works for you but not for them:
+  leave a recorder in a visible tab (clicks with their targets, player API
+  calls with stacks, a 30 ms state sampler) and read it after they reproduce.
+- After ⟳ on the extension, refresh YouTube: tabs left open keep the old code.
 - **A/B extensions:** toggle SponsorBlock / Enhancer / this extension one at a
   time in `brave://extensions` and retry the same video.
 - Check the extension's **Errors** page in `brave://extensions` after changes.

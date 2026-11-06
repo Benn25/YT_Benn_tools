@@ -11,8 +11,8 @@ Extension lives in [`Benn_YTtools/`](Benn_YTtools). Requires Chrome/Brave 111+
 
 1. `chrome://extensions` → enable **Developer mode**
 2. **Load unpacked** → select the `Benn_YTtools` folder
-3. After pulling changes, hit **⟳** on the extension card (no need to reload
-   when only switching between identical files)
+3. After pulling changes, hit **⟳** on the extension card, then **refresh any
+   open YouTube tabs**: they keep running the old code until refreshed
 
 ## What it does
 
